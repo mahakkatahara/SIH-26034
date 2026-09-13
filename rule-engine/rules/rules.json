@@ -1,0 +1,175 @@
+[
+  {
+    "rule_id": "MRP-001",
+    "field": "mrp",
+    "category": null,
+    "mandatory": true,
+    "severity": "HIGH",
+    "description": "Maximum Retail Price (MRP) must be declared on every pre-packaged commodity",
+    "validation_logic": {
+      "type": "presence_check",
+      "field": "mrp"
+    },
+    "legal_reference": "Rule 6(1)(f) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "MRP-002",
+    "field": "mrp",
+    "category": null,
+    "mandatory": true,
+    "severity": "HIGH",
+    "description": "MRP must be declared as 'MRP Rs.' or 'MRP ₹' followed by the inclusive price",
+    "validation_logic": {
+      "type": "format_check",
+      "pattern": "MRP\\s*(Rs\\.?|₹)\\s*[0-9]+",
+      "case_insensitive": true
+    },
+    "legal_reference": "Rule 6(1)(f) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "MRP-003",
+    "field": "mrp",
+    "category": null,
+    "mandatory": true,
+    "severity": "MEDIUM",
+    "description": "MRP declaration must not be obscured, overprinted or struck through",
+    "validation_logic": {
+      "type": "visibility_check",
+      "field": "mrp"
+    },
+    "legal_reference": "Rule 6(1)(f) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "NQ-001",
+    "field": "net_quantity",
+    "category": null,
+    "mandatory": true,
+    "severity": "HIGH",
+    "description": "Net quantity must be declared on all pre-packaged commodities",
+    "validation_logic": {
+      "type": "presence_check",
+      "field": "net_quantity"
+    },
+    "legal_reference": "Rule 6(1)(b) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "NQ-002",
+    "field": "net_quantity",
+    "category": null,
+    "mandatory": true,
+    "severity": "MEDIUM",
+    "description": "Net quantity must be expressed in standard legal units: g, kg, ml, l, cm, m, nos",
+    "validation_logic": {
+      "type": "unit_check",
+      "allowed_units": ["g", "gm", "gram", "kg", "kilogram", "ml", "l", "ltr", "litre", "cm", "m", "nos", "pcs", "units", "number"]
+    },
+    "legal_reference": "Rule 7 — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "MFR-001",
+    "field": "manufacturer_name",
+    "category": null,
+    "mandatory": true,
+    "severity": "HIGH",
+    "description": "Name of the manufacturer, packer, or importer must be declared on the package",
+    "validation_logic": {
+      "type": "presence_check",
+      "field": "manufacturer_name"
+    },
+    "legal_reference": "Rule 6(1)(c) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "MFR-002",
+    "field": "manufacturer_address",
+    "category": null,
+    "mandatory": true,
+    "severity": "HIGH",
+    "description": "Complete postal address including PIN code of manufacturer/packer must be declared",
+    "validation_logic": {
+      "type": "presence_check",
+      "field": "manufacturer_address"
+    },
+    "legal_reference": "Rule 6(1)(c) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "DATE-001",
+    "field": "manufacturing_date",
+    "category": null,
+    "mandatory": true,
+    "severity": "HIGH",
+    "description": "Month and year of manufacture or packing must be declared",
+    "validation_logic": {
+      "type": "presence_check",
+      "field": "manufacturing_date",
+      "format": "month_year"
+    },
+    "legal_reference": "Rule 6(1)(e) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "DATE-002",
+    "field": "best_before_date",
+    "category": null,
+    "mandatory": false,
+    "severity": "MEDIUM",
+    "description": "Best before / use by date should be declared for perishable commodities",
+    "validation_logic": {
+      "type": "conditional_check",
+      "condition": "is_perishable",
+      "field": "best_before_date"
+    },
+    "legal_reference": "Rule 6(1)(e) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "CC-001",
+    "field": "consumer_care_info",
+    "category": null,
+    "mandatory": true,
+    "severity": "MEDIUM",
+    "description": "Consumer care contact information (name/address/phone/email) must be declared",
+    "validation_logic": {
+      "type": "presence_check",
+      "field": "consumer_care_info"
+    },
+    "legal_reference": "Rule 6(1)(l) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "COO-001",
+    "field": "country_of_origin",
+    "category": null,
+    "mandatory": false,
+    "severity": "MEDIUM",
+    "description": "Country of origin must be declared for imported commodities",
+    "validation_logic": {
+      "type": "conditional_check",
+      "condition": "is_imported",
+      "field": "country_of_origin"
+    },
+    "legal_reference": "Rule 6(1)(k) — Legal Metrology (PC) Rules 2011 & Consumer Protection Rules",
+    "rule_version": "1.0"
+  },
+  {
+    "rule_id": "FONT-001",
+    "field": "font_size",
+    "category": null,
+    "mandatory": true,
+    "severity": "MEDIUM",
+    "description": "Declarations must be in legible font size as specified by applicable rules",
+    "validation_logic": {
+      "type": "font_size_check",
+      "min_height_mm": 1.0,
+      "reference": "barcode_dimension"
+    },
+    "legal_reference": "Rule 6(4) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "rule_version": "1.0"
+  }
+]

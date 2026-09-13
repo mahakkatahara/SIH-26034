@@ -1,0 +1,2 @@
+# Alembic versions directory — migration scripts go here
+# Run: alembic revision --autogenerate -m "initial_migration"

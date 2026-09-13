@@ -1,0 +1,9 @@
+# Generic single-instance package files
+**/node_modules
+**/.git
+**/__pycache__
+**/*.pyc
+**/.env
+**/uploads/
+**/dist/
+**/.venv/
