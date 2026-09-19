@@ -55,6 +55,19 @@ class DeclarationResponse(BaseModel):
     created_at: datetime
 
 
+class OCRRegionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    inspection_id: UUID
+    image_id: Optional[UUID] = None
+    text: str
+    confidence_score: Optional[float] = None
+    bounding_box: Optional[Dict[str, Any]] = None
+    language: Optional[str] = None
+    created_at: datetime
+
+
 class ViolationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -94,6 +107,7 @@ class InspectionDetailResponse(InspectionResponse):
     """Full inspection detail with nested relations."""
     images: List[InspectionImageResponse] = []
     declarations: List[DeclarationResponse] = []
+    ocr_regions: List[OCRRegionResponse] = []
     violations: List[ViolationResponse] = []
 
 
@@ -111,11 +125,13 @@ class AnalysisResult(BaseModel):
     """
     Result returned from the AI analysis pipeline.
     In Phase 1, this will always be a DEV_STUB result.
+    In Phase 2+, this contains extracted declarations and OCR regions.
     """
     inspection_id: UUID
     pipeline_status: str  # DEV_STUB | COMPLETED | FAILED
     notice: Optional[str] = None  # Shown for DEV_STUB
     declarations: List[DeclarationResponse] = []
+    ocr_regions: List[OCRRegionResponse] = []
     violations: List[ViolationResponse] = []
     overall_compliance_status: str = "NEEDS_REVIEW"
     confidence_score: Optional[float] = None

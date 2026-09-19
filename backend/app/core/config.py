@@ -5,6 +5,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import List, Union
 import json
+import sys
+from pathlib import Path
+
+# Ensure project modules (ai, rule-engine, backend) can be imported
+for _path_candidate in [
+    Path(__file__).resolve().parents[3],            # project root
+    Path(__file__).resolve().parents[2],            # backend root
+    Path("/app"),
+    Path("/ai"),
+    Path("/rule-engine"),
+]:
+    _p_str = str(_path_candidate)
+    if _path_candidate.exists() and _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
 
 
 class Settings(BaseSettings):
@@ -78,9 +92,11 @@ class Settings(BaseSettings):
         return v
 
     # AI Pipeline
-    AI_PIPELINE_MODE: str = "stub"   # stub | paddleocr | custom
+    AI_PIPELINE_MODE: str = "stub"   # stub | vision | paddleocr | custom
     AI_CONFIDENCE_THRESHOLD: float = 0.75
     AI_STUB_DELAY_SECONDS: float = 2.0
+    GEMINI_API_KEY: str = ""
+    VISION_MODEL: str = "gemini-2.5-flash"
 
     # Rule Engine
     RULES_FILE_PATH: str = "../rule-engine/rules/rules.json"

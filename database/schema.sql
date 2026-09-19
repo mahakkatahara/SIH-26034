@@ -151,6 +151,21 @@ CREATE TABLE IF NOT EXISTS declarations (
 CREATE INDEX idx_declarations_inspection_id ON declarations(inspection_id);
 CREATE INDEX idx_declarations_field_name ON declarations(field_name);
 
+-- OCR Regions (raw text regions detected on images)
+CREATE TABLE IF NOT EXISTS ocr_regions (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    inspection_id    UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+    image_id         UUID REFERENCES inspection_images(id) ON DELETE SET NULL,
+    text             TEXT NOT NULL,
+    confidence_score FLOAT,
+    bounding_box     JSONB,
+    language         VARCHAR(50),
+    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_ocr_regions_inspection_id ON ocr_regions(inspection_id);
+CREATE INDEX idx_ocr_regions_image_id ON ocr_regions(image_id);
+
 -- Compliance Rules
 CREATE TABLE IF NOT EXISTS rules (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

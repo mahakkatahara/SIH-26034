@@ -13,6 +13,7 @@ import os
 from app.core.config import settings
 from app.api.router import api_router
 from app.database.session import engine, Base
+import app.models  # Ensure all models are registered
 
 logger = structlog.get_logger(__name__)
 
@@ -22,6 +23,13 @@ async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown events."""
     # Startup
     logger.info("Starting Legal Metrology Inspection System", version=settings.APP_VERSION)
+
+    # Ensure tables exist
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        logger.warning("Table initialization check failed", error=str(exc))
 
     # Create upload directory if it doesn't exist
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)

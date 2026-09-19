@@ -70,6 +70,7 @@ class Inspection(Base):
     inspector = relationship("User", back_populates="inspections", foreign_keys=[inspector_id])
     images = relationship("InspectionImage", back_populates="inspection", cascade="all, delete-orphan")
     declarations = relationship("Declaration", back_populates="inspection", cascade="all, delete-orphan")
+    ocr_regions = relationship("OCRRegion", back_populates="inspection", cascade="all, delete-orphan")
     violations = relationship("Violation", back_populates="inspection", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="inspection", cascade="all, delete-orphan")
 
@@ -108,6 +109,7 @@ class InspectionImage(Base):
     # Relationships
     inspection = relationship("Inspection", back_populates="images")
     declarations = relationship("Declaration", back_populates="image")
+    ocr_regions = relationship("OCRRegion", back_populates="image")
 
     def __repr__(self) -> str:
         return f"<InspectionImage id={self.id} label={self.label}>"

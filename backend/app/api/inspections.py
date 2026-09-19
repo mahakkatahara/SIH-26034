@@ -4,6 +4,7 @@ Inspections API Routes — CRUD + image upload + AI analysis stub
 import asyncio
 import math
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -11,18 +12,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
 from sqlalchemy import select, func, or_
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user, require_inspector_or_above
 from app.database.session import get_db_session
 from app.models.inspection import Inspection, InspectionImage
+from app.models.declaration import Declaration
+from app.models.ocr_region import OCRRegion
 from app.models.user import User
 from app.schemas.inspection import (
     InspectionCreate, InspectionUpdate, InspectionResponse,
     InspectionDetailResponse, InspectionListResponse,
-    InspectionImageResponse, AnalysisResult,
+    InspectionImageResponse, AnalysisResult, DeclarationResponse,
+    OCRRegionResponse,
 )
+from ai.pipeline.stub_pipeline import get_pipeline, StubPipeline
 
 router = APIRouter()
 
@@ -106,6 +112,7 @@ async def get_inspection(
         .options(
             selectinload(Inspection.images),
             selectinload(Inspection.declarations),
+            selectinload(Inspection.ocr_regions),
             selectinload(Inspection.violations),
         )
         .where(Inspection.id == inspection_id)
@@ -234,36 +241,125 @@ async def analyze_inspection(
 ):
     """
     Trigger AI analysis pipeline on uploaded images.
-
-    ⚠ PHASE 1 DEV STUB: The AI pipeline is not yet implemented.
-    This endpoint returns a clearly-marked stub response.
-    Real OCR/CV analysis will be integrated in Phase 2+.
+    In stub mode, returns a DEV_STUB placeholder.
+    In vision mode, runs VisionPipeline on each image and persists declarations and OCR regions.
     """
-    result = await db.execute(select(Inspection).where(Inspection.id == inspection_id))
+    result = await db.execute(
+        select(Inspection)
+        .options(selectinload(Inspection.images))
+        .where(Inspection.id == inspection_id)
+    )
     inspection = result.scalar_one_or_none()
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
 
-    # Simulate processing delay (configurable)
-    await asyncio.sleep(settings.AI_STUB_DELAY_SECONDS)
+    pipeline = get_pipeline(settings.AI_PIPELINE_MODE)
 
-    # Update pipeline status to DEV_STUB
-    inspection.ai_pipeline_status = "DEV_STUB"
-    inspection.overall_compliance_status = "NEEDS_REVIEW"
+    # If in development stub mode
+    if isinstance(pipeline, StubPipeline) or settings.AI_PIPELINE_MODE == "stub":
+        await asyncio.sleep(settings.AI_STUB_DELAY_SECONDS)
+        inspection.ai_pipeline_status = "DEV_STUB"
+        inspection.overall_compliance_status = "NEEDS_REVIEW"
+        inspection.status = "ANALYSIS_COMPLETE"
+        await db.commit()
+
+        return AnalysisResult(
+            inspection_id=inspection_id,
+            pipeline_status="DEV_STUB",
+            notice=(
+                "⚠ AI pipeline not yet implemented (Phase 1 — Development Stub). "
+                "Real OCR, declaration extraction, and rule engine analysis will be "
+                "integrated in Phase 2 onwards. Human review is required for all inspections."
+            ),
+            declarations=[],
+            ocr_regions=[],
+            violations=[],
+            overall_compliance_status="NEEDS_REVIEW",
+            confidence_score=None,
+            processing_time_ms=int(settings.AI_STUB_DELAY_SECONDS * 1000),
+        )
+
+    # Real Vision Pipeline Mode
+    start_time = time.time()
+    all_saved_declarations = []
+    all_saved_ocr_regions = []
+    all_field_confidences = []
+
+    for img in inspection.images:
+        # Resolve image file location
+        candidates = [
+            img.image_path,
+            os.path.join(settings.UPLOAD_DIR, os.path.basename(img.image_path)),
+            os.path.join(settings.UPLOAD_DIR, str(inspection_id), os.path.basename(img.image_path)),
+            os.path.join(".", img.image_path),
+        ]
+        resolved_path = next((p for p in candidates if os.path.exists(p)), img.image_path)
+
+        # Run pipeline
+        pipeline_result = pipeline.analyze(resolved_path, str(img.id))
+
+        # Persist Declarations
+        for decl in pipeline_result.declarations:
+            bbox_dict = decl.bounding_box.to_dict() if decl.bounding_box else None
+            decl_record = Declaration(
+                inspection_id=inspection_id,
+                image_id=img.id,
+                field_name=decl.field_name,
+                field_value=decl.field_value,
+                raw_text=decl.raw_text,
+                confidence_score=decl.confidence,
+                bounding_box=bbox_dict,
+                extraction_method=decl.extraction_method or "gemini_vision",
+            )
+            db.add(decl_record)
+            all_saved_declarations.append(decl_record)
+            all_field_confidences.append(decl.confidence)
+
+        # Persist OCR Regions
+        for region in pipeline_result.ocr_regions:
+            rbox_dict = region.bounding_box.to_dict() if region.bounding_box else None
+            ocr_record = OCRRegion(
+                inspection_id=inspection_id,
+                image_id=img.id,
+                text=region.text,
+                confidence_score=region.confidence,
+                bounding_box=rbox_dict,
+                language=getattr(region, "language", None),
+            )
+            db.add(ocr_record)
+            all_saved_ocr_regions.append(ocr_record)
+
+        img.processing_status = "COMPLETED"
+        img.processed_at = datetime.now(timezone.utc)
+
+    # Compute mean confidence score
+    mean_confidence = (
+        float(sum(all_field_confidences) / len(all_field_confidences))
+        if all_field_confidences
+        else 0.0
+    )
+
+    inspection.ai_pipeline_status = "COMPLETED"
     inspection.status = "ANALYSIS_COMPLETE"
+    inspection.overall_compliance_status = "NEEDS_REVIEW"
+    inspection.ai_confidence_score = round(mean_confidence, 4)
+
     await db.commit()
+    for d in all_saved_declarations:
+        await db.refresh(d)
+    for r in all_saved_ocr_regions:
+        await db.refresh(r)
+
+    elapsed_ms = int((time.time() - start_time) * 1000)
 
     return AnalysisResult(
         inspection_id=inspection_id,
-        pipeline_status="DEV_STUB",
-        notice=(
-            "⚠ AI pipeline not yet implemented (Phase 1 — Development Stub). "
-            "Real OCR, declaration extraction, and rule engine analysis will be "
-            "integrated in Phase 2 onwards. Human review is required for all inspections."
-        ),
-        declarations=[],
+        pipeline_status="COMPLETED",
+        notice=None,
+        declarations=[DeclarationResponse.model_validate(d) for d in all_saved_declarations],
+        ocr_regions=[OCRRegionResponse.model_validate(r) for r in all_saved_ocr_regions],
         violations=[],
         overall_compliance_status="NEEDS_REVIEW",
-        confidence_score=None,
-        processing_time_ms=int(settings.AI_STUB_DELAY_SECONDS * 1000),
+        confidence_score=inspection.ai_confidence_score,
+        processing_time_ms=elapsed_ms,
     )

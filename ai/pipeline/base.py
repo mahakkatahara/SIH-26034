@@ -9,10 +9,15 @@ Phase 2: PaddleOCREngine
 Phase 3: DeclarationExtractor
 Phase 4+: Full pipeline
 """
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
-import numpy as np
+
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
 
 
 @dataclass
@@ -141,7 +146,7 @@ class BasePipeline(ABC):
     """
     Abstract interface for the complete AI analysis pipeline.
 
-    The pipeline orchestrates: preprocessing → OCR → extraction.
+    The pipeline orchestrates: preprocessing -> OCR -> extraction.
     The rule engine is called separately (in the backend service layer).
     """
 

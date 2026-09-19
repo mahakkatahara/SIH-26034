@@ -27,16 +27,33 @@ services:
     image: redis:7-alpine
     container_name: lmis_redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD:-}
+    command: >
+      sh -c '
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --requirepass "$$REDIS_PASSWORD"
+        else
+          exec redis-server
+        fi
+      '
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: >
+        sh -c '
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping
+          else
+            redis-cli ping
+          fi
+        '
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 5s
 
   # ─── Backend (FastAPI) ─────────────────────────────────────────────────────
   backend:
@@ -53,6 +70,8 @@ services:
       - ./backend:/app
       - ./uploads:/app/uploads
       - ./rule-engine:/rule-engine
+      - ./ai:/app/ai
+      - ./ai:/ai
     ports:
       - "8000:8000"
     depends_on:

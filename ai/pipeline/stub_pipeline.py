@@ -14,7 +14,7 @@ Real implementations will replace this in Phase 2+:
 DO NOT use stub results as real compliance decisions.
 """
 import time
-from typing import List
+from typing import List, Optional
 
 from ai.pipeline.base import (
     BasePipeline, PipelineResult, OCRTextRegion, ExtractedDeclaration,
@@ -72,34 +72,29 @@ class StubPipeline(BasePipeline):
         )
 
 
-def get_pipeline(mode: str = "stub") -> BasePipeline:
+def get_pipeline(mode: Optional[str] = None) -> BasePipeline:
     """
     Factory function to get the appropriate pipeline implementation.
 
     Args:
-        mode: Pipeline mode from config.
-              "stub" → StubPipeline (Phase 1)
-              "paddleocr" → PaddleOCRPipeline (Phase 2, not yet implemented)
-              "custom" → CustomPipeline (future)
+        mode: Pipeline mode from config or parameter.
+              "vision" → VisionPipeline (Phase 2+3 Gemini vision)
+              "stub" → StubPipeline (Phase 1 development stub)
+              If None, reads AI_PIPELINE_MODE from settings or environment.
 
     Returns:
-        Pipeline instance.
-
-    Raises:
-        NotImplementedError: If the requested mode is not yet implemented.
+        BasePipeline instance.
     """
-    if mode == "stub":
-        return StubPipeline()
-    elif mode == "paddleocr":
-        raise NotImplementedError(
-            "PaddleOCR pipeline not yet implemented. "
-            "This will be available in Phase 2. "
-            "Set AI_PIPELINE_MODE=stub to use the development stub."
-        )
-    elif mode == "custom":
-        raise NotImplementedError(
-            "Custom pipeline not yet implemented. "
-            "Set AI_PIPELINE_MODE=stub to use the development stub."
-        )
+    if mode is None:
+        try:
+            from app.core.config import settings
+            mode = getattr(settings, "AI_PIPELINE_MODE", "stub")
+        except Exception:
+            import os
+            mode = os.getenv("AI_PIPELINE_MODE", "stub")
+
+    if mode == "vision":
+        from ai.pipeline.vision_pipeline import VisionPipeline
+        return VisionPipeline()
     else:
-        raise ValueError(f"Unknown pipeline mode: {mode!r}. Use 'stub', 'paddleocr', or 'custom'.")
+        return StubPipeline()

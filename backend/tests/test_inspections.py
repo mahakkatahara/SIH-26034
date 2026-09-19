@@ -83,7 +83,10 @@ async def test_viewer_cannot_create_inspection(client, db_session):
 
 @pytest.mark.asyncio
 async def test_analyze_inspection_stub(client, inspector_token):
-    """The analyze endpoint should return a DEV_STUB result in Phase 1."""
+    """The analyze endpoint should return a DEV_STUB result in stub mode."""
+    from unittest.mock import patch
+    from app.core.config import settings
+
     create_resp = await client.post(
         "/api/v1/inspections",
         json={"remarks": "Analyze test"},
@@ -91,12 +94,13 @@ async def test_analyze_inspection_stub(client, inspector_token):
     )
     inspection_id = create_resp.json()["id"]
 
-    resp = await client.post(
-        f"/api/v1/inspections/{inspection_id}/analyze",
-        headers={"Authorization": f"Bearer {inspector_token}"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["pipeline_status"] == "DEV_STUB"
-    assert "notice" in data
-    assert data["overall_compliance_status"] == "NEEDS_REVIEW"
+    with patch.object(settings, "AI_PIPELINE_MODE", "stub"):
+        resp = await client.post(
+            f"/api/v1/inspections/{inspection_id}/analyze",
+            headers={"Authorization": f"Bearer {inspector_token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pipeline_status"] == "DEV_STUB"
+        assert "notice" in data
+        assert data["overall_compliance_status"] == "NEEDS_REVIEW"

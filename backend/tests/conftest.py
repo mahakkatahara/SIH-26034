@@ -9,6 +9,16 @@ from app.main import app
 from app.database.session import Base, get_db_session
 from app.core.security import hash_password
 from app.models.user import User
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+@compiles(UUID, "sqlite")
+def compile_uuid_sqlite(type_, compiler, **kw):
+    return "CHAR(36)"
 
 # Use SQLite for tests (in-memory, no PostgreSQL required)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -56,29 +66,37 @@ async def client(setup_db):
 
 @pytest_asyncio.fixture
 async def admin_user(db_session: AsyncSession):
-    user = User(
-        email="testadmin@test.com",
-        hashed_password=hash_password("TestAdmin@123"),
-        full_name="Test Admin",
-        role="ADMIN",
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
+    from sqlalchemy import select
+    result = await db_session.execute(select(User).where(User.email == "testadmin@test.com"))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(
+            email="testadmin@test.com",
+            hashed_password=hash_password("TestAdmin@123"),
+            full_name="Test Admin",
+            role="ADMIN",
+        )
+        db_session.add(user)
+        await db_session.commit()
+        await db_session.refresh(user)
     return user
 
 
 @pytest_asyncio.fixture
 async def inspector_user(db_session: AsyncSession):
-    user = User(
-        email="testinspector@test.com",
-        hashed_password=hash_password("TestInspector@123"),
-        full_name="Test Inspector",
-        role="INSPECTOR",
-    )
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
+    from sqlalchemy import select
+    result = await db_session.execute(select(User).where(User.email == "testinspector@test.com"))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(
+            email="testinspector@test.com",
+            hashed_password=hash_password("TestInspector@123"),
+            full_name="Test Inspector",
+            role="INSPECTOR",
+        )
+        db_session.add(user)
+        await db_session.commit()
+        await db_session.refresh(user)
     return user
 
 
