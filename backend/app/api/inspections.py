@@ -21,14 +21,17 @@ from app.database.session import get_db_session
 from app.models.inspection import Inspection, InspectionImage
 from app.models.declaration import Declaration
 from app.models.ocr_region import OCRRegion
+from app.models.violation import Violation
+from app.models.rule import Rule
 from app.models.user import User
 from app.schemas.inspection import (
     InspectionCreate, InspectionUpdate, InspectionResponse,
     InspectionDetailResponse, InspectionListResponse,
     InspectionImageResponse, AnalysisResult, DeclarationResponse,
-    OCRRegionResponse,
+    OCRRegionResponse, ViolationResponse,
 )
 from ai.pipeline.stub_pipeline import get_pipeline, StubPipeline
+from engine import get_rule_engine
 
 router = APIRouter()
 
@@ -296,7 +299,15 @@ async def analyze_inspection(
         resolved_path = next((p for p in candidates if os.path.exists(p)), img.image_path)
 
         # Run pipeline
-        pipeline_result = pipeline.analyze(resolved_path, str(img.id))
+        try:
+            pipeline_result = pipeline.analyze(resolved_path, str(img.id))
+        except Exception as exc:
+            inspection.ai_pipeline_status = "FAILED"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AI pipeline analysis failed: {exc}",
+            )
 
         # Persist Declarations
         for decl in pipeline_result.declarations:
@@ -339,9 +350,61 @@ async def analyze_inspection(
         else 0.0
     )
 
+    # Flush to generate IDs for new declarations
+    await db.flush()
+
+    # Run deterministic rule engine
+    rule_engine = get_rule_engine()
+    decl_dicts = [
+        {
+            "id": str(d.id) if d.id else None,
+            "declaration_id": str(d.id) if d.id else None,
+            "field_name": d.field_name,
+            "field_value": d.field_value,
+            "raw_text": d.raw_text,
+            "confidence": d.confidence_score,
+            "bounding_box": d.bounding_box,
+        }
+        for d in all_saved_declarations
+    ]
+    product_category = getattr(inspection.product, "category", None) if inspection.product else None
+    compliance_result = rule_engine.evaluate(
+        declarations=decl_dicts,
+        product_category=product_category,
+        product_context={},
+        overall_confidence=mean_confidence,
+        confidence_threshold=settings.AI_CONFIDENCE_THRESHOLD,
+    )
+
+    # Fetch DB rules for mapping rule_id string (e.g. MRP-001) to rule UUID
+    db_rules = (await db.execute(select(Rule))).scalars().all()
+    rule_id_map = {r.rule_id: r.id for r in db_rules}
+
+    all_saved_violations = []
+    for issue in compliance_result.violations + compliance_result.warnings:
+        target_decl_id = None
+        if issue.declaration_id and str(issue.declaration_id) != "None":
+            try:
+                target_decl_id = UUID(str(issue.declaration_id))
+            except (ValueError, TypeError):
+                target_decl_id = None
+
+        v_rec = Violation(
+            inspection_id=inspection_id,
+            rule_id=rule_id_map.get(issue.rule_id),
+            declaration_id=target_decl_id,
+            severity=issue.severity.value if hasattr(issue.severity, "value") else str(issue.severity),
+            status="OPEN",
+            description=issue.description,
+            legal_reference=issue.legal_reference,
+            evidence_region=issue.evidence,
+        )
+        db.add(v_rec)
+        all_saved_violations.append(v_rec)
+
     inspection.ai_pipeline_status = "COMPLETED"
     inspection.status = "ANALYSIS_COMPLETE"
-    inspection.overall_compliance_status = "NEEDS_REVIEW"
+    inspection.overall_compliance_status = compliance_result.status.value
     inspection.ai_confidence_score = round(mean_confidence, 4)
 
     await db.commit()
@@ -349,6 +412,8 @@ async def analyze_inspection(
         await db.refresh(d)
     for r in all_saved_ocr_regions:
         await db.refresh(r)
+    for v in all_saved_violations:
+        await db.refresh(v)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -358,8 +423,8 @@ async def analyze_inspection(
         notice=None,
         declarations=[DeclarationResponse.model_validate(d) for d in all_saved_declarations],
         ocr_regions=[OCRRegionResponse.model_validate(r) for r in all_saved_ocr_regions],
-        violations=[],
-        overall_compliance_status="NEEDS_REVIEW",
+        violations=[ViolationResponse.model_validate(v) for v in all_saved_violations],
+        overall_compliance_status=compliance_result.status.value,
         confidence_score=inspection.ai_confidence_score,
         processing_time_ms=elapsed_ms,
     )

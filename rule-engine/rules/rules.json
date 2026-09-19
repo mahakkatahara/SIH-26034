@@ -11,6 +11,7 @@
       "field": "mrp"
     },
     "legal_reference": "Rule 6(1)(f) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -26,6 +27,7 @@
       "case_insensitive": true
     },
     "legal_reference": "Rule 6(1)(f) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -40,6 +42,7 @@
       "field": "mrp"
     },
     "legal_reference": "Rule 6(1)(f) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -54,6 +57,7 @@
       "field": "net_quantity"
     },
     "legal_reference": "Rule 6(1)(b) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -68,6 +72,7 @@
       "allowed_units": ["g", "gm", "gram", "kg", "kilogram", "ml", "l", "ltr", "litre", "cm", "m", "nos", "pcs", "units", "number"]
     },
     "legal_reference": "Rule 7 — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -82,6 +87,7 @@
       "field": "manufacturer_name"
     },
     "legal_reference": "Rule 6(1)(c) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -96,6 +102,7 @@
       "field": "manufacturer_address"
     },
     "legal_reference": "Rule 6(1)(c) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -111,6 +118,7 @@
       "format": "month_year"
     },
     "legal_reference": "Rule 6(1)(e) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -126,6 +134,7 @@
       "field": "best_before_date"
     },
     "legal_reference": "Rule 6(1)(e) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -140,6 +149,7 @@
       "field": "consumer_care_info"
     },
     "legal_reference": "Rule 6(1)(l) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -155,6 +165,7 @@
       "field": "country_of_origin"
     },
     "legal_reference": "Rule 6(1)(k) — Legal Metrology (PC) Rules 2011 & Consumer Protection Rules",
+    "citation_verified": false,
     "rule_version": "1.0"
   },
   {
@@ -170,6 +181,7 @@
       "reference": "barcode_dimension"
     },
     "legal_reference": "Rule 6(4) — Legal Metrology (Packaged Commodities) Rules, 2011",
+    "citation_verified": false,
     "rule_version": "1.0"
   }
 ]

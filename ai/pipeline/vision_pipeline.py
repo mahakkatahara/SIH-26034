@@ -386,7 +386,7 @@ class VisionPipeline(BasePipeline):
             except Exception as exc:
                 last_error = exc
                 if attempt == 0:
-                    time.sleep(0.5)
+                    time.sleep(1.0)
                     continue
                 else:
                     raise PipelineError(f"Malformed JSON response from Gemini after retry: {last_error}") from last_error
