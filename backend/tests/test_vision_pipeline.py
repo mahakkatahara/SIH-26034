@@ -357,3 +357,15 @@ def test_parse_bounding_box_inverted_coordinates_normalized():
     assert bbox.width == 200.0
     assert bbox.height == 40.0
 
+
+def test_parse_bounding_box_gemini_normalized_scaled_to_image():
+    """Gemini [ymin, xmin, ymax, xmax] normalized to 1000 scales accurately to image dimensions."""
+    # [ymin=562, xmin=759, ymax=783, xmax=783] on 1280x720 image
+    bbox = parse_bounding_box([562, 759, 783, 783], conf=0.90, img_width=1280, img_height=720)
+    assert bbox is not None
+    assert bbox.x == round(759 / 1000.0 * 1280, 2)  # 971.52
+    assert bbox.y == round(562 / 1000.0 * 720, 2)   # 404.64
+    assert bbox.width == round(24 / 1000.0 * 1280, 2) # 30.72
+    assert bbox.height == round(221 / 1000.0 * 720, 2) # 159.12
+
+

@@ -255,44 +255,54 @@ def normalize_date(raw_text: Optional[str], value: Optional[str] = None) -> Dict
 
 
 def parse_bounding_box(
-    bbox_coords: Optional[List[Union[int, float]]], conf: float = 0.0
+    bbox_coords: Optional[List[Union[int, float]]],
+    conf: float = 0.0,
+    img_width: Optional[int] = None,
+    img_height: Optional[int] = None,
 ) -> Optional[BoundingBox]:
     """
     Parses and validates bounding box coordinates from Gemini Vision output.
+    Gemini standard format is [ymin, xmin, ymax, xmax] normalized to 0-1000.
+    Scales to source pixel dimensions if img_width and img_height are provided.
     Rejects degenerate bounding boxes (width <= 0 or height <= 0).
-    Handles both [x1, y1, x2, y2] and [ymin, xmin, ymax, xmax] coordinate orders.
     """
     if not bbox_coords or len(bbox_coords) != 4:
         return None
     try:
         c1, c2, c3, c4 = [float(v) for v in bbox_coords]
-        x1, x2 = min(c1, c3), max(c1, c3)
-        y1, y2 = min(c2, c4), max(c2, c4)
-        width = x2 - x1
-        height = y2 - y1
 
-        # Check if coordinates were [ymin, xmin, ymax, xmax]
+        # Check if coordinates are normalized 0-1000 or absolute pixels
+        is_normalized_1000 = all(0.0 <= v <= 1000.0 for v in (c1, c2, c3, c4)) and (
+            img_width is not None and img_height is not None and (max(c1, c2, c3, c4) <= 1000.0)
+        )
+
+        if is_normalized_1000 and img_width and img_height:
+            # Gemini native format: [ymin, xmin, ymax, xmax] normalized to 1000
+            ymin, ymax = min(c1, c3), max(c1, c3)
+            xmin, xmax = min(c2, c4), max(c2, c4)
+            x = (xmin / 1000.0) * img_width
+            y = (ymin / 1000.0) * img_height
+            width = ((xmax - xmin) / 1000.0) * img_width
+            height = ((ymax - ymin) / 1000.0) * img_height
+        else:
+            # Absolute pixel coordinates: check [ymin, xmin, ymax, xmax] vs [x1, y1, x2, y2]
+            # Standard order: x from horizontal bounds, y from vertical bounds
+            x1, x2 = min(c1, c3), max(c1, c3)
+            y1, y2 = min(c2, c4), max(c2, c4)
+            width = x2 - x1
+            height = y2 - y1
+            x = x1
+            y = y1
+
+        # Strict degenerate validation: reject any non-positive dimension
         if width <= 0.0 or height <= 0.0:
-            alt_x1, alt_x2 = min(c2, c4), max(c2, c4)
-            alt_y1, alt_y2 = min(c1, c3), max(c1, c3)
-            alt_width = alt_x2 - alt_x1
-            alt_height = alt_y2 - alt_y1
-            if alt_width > 0.0 and alt_height > 0.0:
-                return BoundingBox(
-                    x=alt_x1,
-                    y=alt_y1,
-                    width=alt_width,
-                    height=alt_height,
-                    confidence=conf,
-                )
-            # Truly degenerate (width <= 0 or height <= 0)
             return None
 
         return BoundingBox(
-            x=x1,
-            y=y1,
-            width=width,
-            height=height,
+            x=round(x, 2),
+            y=round(y, 2),
+            width=round(width, 2),
+            height=round(height, 2),
             confidence=conf,
         )
     except Exception:
@@ -444,6 +454,14 @@ class VisionPipeline(BasePipeline):
         confidences: List[float] = []
         normalized_data: Dict[str, Any] = {}
 
+        img_width, img_height = None, None
+        try:
+            from PIL import Image
+            with Image.open(image_path) as pil_img:
+                img_width, img_height = pil_img.size
+        except Exception:
+            pass
+
         for field_name in self.MANDATORY_FIELDS:
             field_data: FieldExtraction = getattr(analysis_data, field_name, FieldExtraction())
 
@@ -453,7 +471,7 @@ class VisionPipeline(BasePipeline):
             conf = float(field_data.confidence) if val is not None else 0.0
             bbox_coords = field_data.bounding_box
 
-            bbox = parse_bounding_box(bbox_coords, conf)
+            bbox = parse_bounding_box(bbox_coords, conf, img_width, img_height)
 
             # Normalization per field type
             if field_name == "mrp":
@@ -485,7 +503,7 @@ class VisionPipeline(BasePipeline):
         # Convert OCR regions
         ocr_regions: List[OCRTextRegion] = []
         for region in analysis_data.ocr_regions:
-            region_bbox = parse_bounding_box(region.bounding_box, float(region.confidence))
+            region_bbox = parse_bounding_box(region.bounding_box, float(region.confidence), img_width, img_height)
             ocr_regions.append(
                 OCRTextRegion(
                     text=region.text,

@@ -564,8 +564,17 @@ class RuleEngine:
         """
         conditional_check: Evaluate only when rule.condition holds against
         the product context (e.g. is_imported, is_perishable); else return NOT_APPLICABLE.
+        If condition key is not provided in context, return NEEDS_REVIEW.
         """
         condition_key = rule.validation_logic.get("condition")
+        if condition_key and (condition_key not in product_context or product_context.get(condition_key) is None):
+            return RuleEvaluationResult(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                status=RuleEvaluationStatus.NEEDS_REVIEW,
+                reason=f"Product context key '{condition_key}' not provided; cannot evaluate conditional rule",
+            )
+
         condition_holds = bool(product_context.get(condition_key, False)) if condition_key else True
 
         if not condition_holds:
@@ -894,13 +903,71 @@ class RuleEngine:
                 else 0.0
             )
 
-        # 3. Evaluate each rule deterministically
         violations: List[RuleViolation] = []
         warnings: List[RuleViolation] = []
         rule_results: List[RuleEvaluationResult] = []
         needs_review_reasons: List[str] = []
         notes: List[str] = []
 
+        # 3. Cross-Field Data Integrity Checks
+        # a) Cross-panel commodity name disagreement check
+        panel_commodities: Dict[str, str] = {}
+        for d in (declarations or []):
+            d_dict = d if isinstance(d, dict) else d.__dict__
+            fn = d_dict.get("field_name")
+            p = d_dict.get("panel")
+            val = d_dict.get("field_value")
+            if fn == "commodity_name" and p and val and str(val).strip():
+                panel_commodities[p] = str(val).strip()
+
+        if len(panel_commodities) > 1:
+            distinct_names = set(panel_commodities.values())
+            if len(distinct_names) > 1:
+                notes.append(
+                    f"Data integrity warning: Discrepancy between commodity names on different panels "
+                    f"({dict(panel_commodities)}). Multi-image inspection may contain photos of different products."
+                )
+
+        # b) Cross-field arithmetic consistency: MRP / Net Quantity vs USP
+        mrp_decl = decls_by_field.get("mrp")
+        nq_decl = decls_by_field.get("net_quantity")
+        usp_decl = decls_by_field.get("unit_sale_price")
+        if (
+            mrp_decl and self._is_present(mrp_decl)
+            and nq_decl and self._is_present(nq_decl)
+            and usp_decl and self._is_present(usp_decl)
+        ):
+            try:
+                mrp_str = str(mrp_decl.get("field_value") or mrp_decl.get("raw_text") or "")
+                m_mrp = re.search(r"(\d+(?:\.\d+)?)", mrp_str.replace(",", ""))
+                nq_str = str(nq_decl.get("field_value") or nq_decl.get("raw_text") or "")
+                m_nq = re.search(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?", nq_str.replace(",", ""))
+                usp_str = str(usp_decl.get("field_value") or usp_decl.get("raw_text") or "")
+                m_usp = re.search(r"(\d+(?:\.\d+)?)", usp_str.replace(",", ""))
+
+                if m_mrp and m_nq and m_usp:
+                    mrp_val = float(m_mrp.group(1))
+                    nq_val = float(m_nq.group(1))
+                    nq_unit = (m_nq.group(2) or "").lower()
+                    usp_val = float(m_usp.group(1))
+
+                    if nq_val > 0 and usp_val > 0:
+                        expected_usp = mrp_val / nq_val
+                        rel_diff = abs(expected_usp - usp_val) / max(expected_usp, usp_val)
+                        rel_diff_kilo = abs(expected_usp * 1000.0 - usp_val) / max(expected_usp * 1000.0, usp_val)
+                        rel_diff_milli = abs(expected_usp / 1000.0 - usp_val) / max(expected_usp / 1000.0, usp_val)
+                        min_rel_diff = min(rel_diff, rel_diff_kilo, rel_diff_milli)
+
+                        if min_rel_diff > 0.15:
+                            notes.append(
+                                f"Data integrity warning: MRP (₹{mrp_val:.2f}) ÷ Net Quantity ({nq_val} {nq_unit}) "
+                                f"= ₹{expected_usp:.2f} does not approximate declared Unit Sale Price "
+                                f"(₹{usp_val:.2f}). Possible mixed-product data or incorrect declaration."
+                            )
+            except Exception:
+                pass
+
+        # 4. Evaluate each applicable rule deterministically
         for rule in applicable_rules:
             v_type = rule.validation_logic.get("type", "presence_check")
             decl = decls_by_field.get(rule.field)
@@ -960,13 +1027,15 @@ class RuleEngine:
         elif warnings:
             # Only MEDIUM / LOW severity issues
             status = ComplianceStatus.WARNING
-        elif needs_review_reasons:
-            # All mandatory pass, but specific visibility/confidence review flagged
+        elif any(any(r.mandatory and r.rule_id in nr for r in applicable_rules) for nr in needs_review_reasons):
+            # A mandatory rule requires review (e.g. low visibility / unreadable text)
             status = ComplianceStatus.NEEDS_REVIEW
             notes.extend(needs_review_reasons)
         else:
-            # All mandatory rules passed, no warnings, no reviews
+            # All mandatory rules passed, no warnings, no mandatory reviews
             status = ComplianceStatus.COMPLIANT
+            # Append any non-mandatory review advisories to notes
+            notes.extend(needs_review_reasons)
 
         return ComplianceResult(
             status=status,

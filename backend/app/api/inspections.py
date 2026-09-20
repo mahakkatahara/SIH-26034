@@ -384,11 +384,33 @@ async def analyze_inspection(
     ]
     product_category = getattr(inspection.product, "category", None) if inspection.product else None
     product_pkg_type = getattr(inspection.product, "package_type", "retail") if inspection.product else "retail"
-    is_perishable = False
-    if product_category and str(product_category).lower() in ("food", "perishable", "beverage", "grocery"):
-        is_perishable = True
-    elif inspection.product and getattr(inspection.product, "is_perishable", False):
-        is_perishable = True
+
+    PERISHABLE_CATEGORIES = {
+        "food", "beverage", "grocery", "perishable",
+        "confectionery", "snacks", "dairy", "bakery",
+        "meat", "seafood", "produce", "edible oil", "sweets"
+    }
+    NON_PERISHABLE_CATEGORIES = {
+        "electronics", "hardware", "textiles", "apparel",
+        "stationery", "cosmetics", "toys", "footwear", "utensils"
+    }
+
+    is_perishable: Optional[bool] = None
+    if inspection.product and getattr(inspection.product, "is_perishable", None) is not None:
+        is_perishable = bool(inspection.product.is_perishable)
+    elif product_category:
+        cat_lower = str(product_category).strip().lower()
+        if any(c in cat_lower for c in PERISHABLE_CATEGORIES):
+            is_perishable = True
+        elif any(c in cat_lower for c in NON_PERISHABLE_CATEGORIES):
+            is_perishable = False
+        else:
+            is_perishable = None  # Unknown category => triggers NEEDS_REVIEW on DATE-002
+    else:
+        is_perishable = None  # Missing context => triggers NEEDS_REVIEW on DATE-002
+
+    requires_usp = (product_pkg_type == "retail")
+    is_imported = getattr(inspection.product, "is_imported", None) if inspection.product else None
 
     compliance_result = rule_engine.evaluate(
         declarations=decl_dicts,
@@ -396,6 +418,8 @@ async def analyze_inspection(
         product_context={
             "package_type": product_pkg_type or "retail",
             "is_perishable": is_perishable,
+            "requires_usp": requires_usp,
+            "is_imported": is_imported,
         },
         overall_confidence=mean_confidence,
         confidence_threshold=settings.AI_CONFIDENCE_THRESHOLD,

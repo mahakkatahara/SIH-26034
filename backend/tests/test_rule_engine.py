@@ -1013,3 +1013,66 @@ def test_decoupled_confidence_metric_and_coverage(rule_engine):
     assert not any("Low extraction confidence" in note for note in result.notes)
 
 
+def test_conditional_check_missing_context_triggers_needs_review(rule_engine):
+    """If a conditional rule's context key is omitted, it must return NEEDS_REVIEW, not NOT_APPLICABLE."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "DATE-002")
+    decl = {"field_name": "best_before_date", "field_value": None}
+    # Empty product_context (is_perishable missing)
+    res = rule_engine._check_conditional(rule, decl, product_context={})
+    assert res.status == RuleEvaluationStatus.NEEDS_REVIEW
+    assert "not provided" in res.reason
+
+
+def test_conditional_check_inactive_condition_returns_not_applicable(rule_engine):
+    """If a conditional rule's context key is explicitly False, it returns NOT_APPLICABLE."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "DATE-002")
+    decl = {"field_name": "best_before_date", "field_value": None}
+    res = rule_engine._check_conditional(rule, decl, product_context={"is_perishable": False})
+    assert res.status == RuleEvaluationStatus.NOT_APPLICABLE
+    assert res.violation is None
+
+
+def test_conditional_check_active_missing_decl_fails(rule_engine):
+    """If a conditional rule's context key is True and field is missing, it returns FAILED with a violation."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "DATE-002")
+    decl = {"field_name": "best_before_date", "field_value": None}
+    res = rule_engine._check_conditional(rule, decl, product_context={"is_perishable": True})
+    assert res.status == RuleEvaluationStatus.FAILED
+    assert res.violation is not None
+    assert res.violation.rule_id == "DATE-002"
+
+
+def test_citation_verified_field_on_violations(rule_engine):
+    """Every rule violation must carry citation_verified: bool matching the rule definition."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "MRP-001")
+    res = rule_engine._check_presence(rule, None)
+    assert res.status == RuleEvaluationStatus.FAILED
+    assert hasattr(res.violation, "citation_verified")
+    assert isinstance(res.violation.citation_verified, bool)
+    assert res.violation.citation_verified is False
+
+
+def test_cross_field_arithmetic_consistency_warning(rule_engine):
+    """MRP ÷ Net Quantity mismatching USP by > 15% must emit a data integrity warning."""
+    # e.g. 5 kg at ₹90/kg should be ₹450, but MRP is ₹65 (the mixed Hershey/Rice fixture)
+    decls = [
+        {"field_name": "commodity_name", "field_value": "Rice", "confidence": 0.95},
+        {"field_name": "net_quantity", "field_value": "5 kg", "confidence": 0.95},
+        {"field_name": "mrp", "field_value": "₹ 65.00", "confidence": 0.95},
+        {"field_name": "unit_sale_price", "field_value": "Rs. 90.00 / kg", "confidence": 0.95},
+    ]
+    res = rule_engine.evaluate(declarations=decls, package_type="retail")
+    assert any("Data integrity warning: MRP" in note and "does not approximate declared Unit Sale Price" in note for note in res.notes)
+
+
+def test_cross_panel_commodity_name_disagreement_warning(rule_engine):
+    """Conflicting commodity names across panels must emit a cross-panel data integrity warning."""
+    decls = [
+        {"field_name": "commodity_name", "field_value": "HEY'S", "panel": "FRONT", "confidence": 0.90},
+        {"field_name": "commodity_name", "field_value": "Premium Basmati Rice", "panel": "BACK", "confidence": 0.95},
+    ]
+    res = rule_engine.evaluate(declarations=decls, package_type="retail")
+    assert any("Discrepancy between commodity names on different panels" in note for note in res.notes)
+
+
+
