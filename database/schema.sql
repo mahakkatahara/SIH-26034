@@ -1,247 +1,608 @@
--- =============================================================================
--- Legal Metrology Inspection System — Reference Database Schema
--- Generated for: PostgreSQL 15+
--- Note: Alembic manages actual migrations. This file is for reference/Docker init.
--- =============================================================================
+﻿--
+-- PostgreSQL database dump
+--
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+\restrict E3mtFCBKXtO9CoXP4xEgGhraRI3HyPQxmogUXWvGEBU9Gc2hqrxkdCOv4RkHTQW
 
--- =============================================================================
--- ENUMS
--- =============================================================================
+-- Dumped from database version 15.19
+-- Dumped by pg_dump version 15.19
 
-CREATE TYPE user_role AS ENUM ('ADMIN', 'INSPECTOR', 'VIEWER');
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
 
-CREATE TYPE inspection_status AS ENUM (
-    'DRAFT', 'IN_PROGRESS', 'ANALYSIS_PENDING', 
-    'ANALYSIS_COMPLETE', 'COMPLETED', 'CANCELLED'
+--
+-- Name: compliance_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.compliance_status AS ENUM (
+    'COMPLIANT',
+    'NON_COMPLIANT',
+    'WARNING',
+    'NEEDS_REVIEW',
+    'PENDING'
 );
 
-CREATE TYPE compliance_status AS ENUM (
-    'COMPLIANT', 'NON_COMPLIANT', 'WARNING', 'NEEDS_REVIEW', 'PENDING'
+
+--
+-- Name: image_label; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.image_label AS ENUM (
+    'FRONT',
+    'BACK',
+    'SIDE',
+    'TOP',
+    'BOTTOM',
+    'OTHER'
 );
 
-CREATE TYPE image_label AS ENUM (
-    'FRONT', 'BACK', 'SIDE', 'TOP', 'BOTTOM', 'OTHER'
+
+--
+-- Name: inspection_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.inspection_status AS ENUM (
+    'DRAFT',
+    'IN_PROGRESS',
+    'ANALYSIS_PENDING',
+    'ANALYSIS_COMPLETE',
+    'COMPLETED',
+    'CANCELLED'
 );
 
-CREATE TYPE processing_status AS ENUM (
-    'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'STUB'
+
+--
+-- Name: pipeline_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.pipeline_status AS ENUM (
+    'NOT_STARTED',
+    'PREPROCESSING',
+    'OCR',
+    'EXTRACTION',
+    'RULE_CHECK',
+    'COMPLETED',
+    'FAILED',
+    'DEV_STUB'
 );
 
-CREATE TYPE pipeline_status AS ENUM (
-    'NOT_STARTED', 'PREPROCESSING', 'OCR', 'EXTRACTION', 
-    'RULE_CHECK', 'COMPLETED', 'FAILED', 'DEV_STUB'
+
+--
+-- Name: processing_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.processing_status AS ENUM (
+    'PENDING',
+    'PROCESSING',
+    'COMPLETED',
+    'FAILED',
+    'STUB'
 );
 
-CREATE TYPE violation_severity AS ENUM ('HIGH', 'MEDIUM', 'LOW', 'INFO');
 
-CREATE TYPE violation_status AS ENUM (
-    'OPEN', 'ACKNOWLEDGED', 'RESOLVED', 'FALSE_POSITIVE'
+--
+-- Name: report_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.report_status AS ENUM (
+    'PENDING',
+    'GENERATING',
+    'COMPLETED',
+    'FAILED',
+    'STUB'
 );
 
-CREATE TYPE report_type AS ENUM ('PDF', 'DOCX');
 
-CREATE TYPE report_status AS ENUM (
-    'PENDING', 'GENERATING', 'COMPLETED', 'FAILED', 'STUB'
+--
+-- Name: report_type; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.report_type AS ENUM (
+    'PDF',
+    'DOCX'
 );
 
--- =============================================================================
--- TABLES
--- =============================================================================
 
--- Users
-CREATE TABLE IF NOT EXISTS users (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email           VARCHAR(255) UNIQUE NOT NULL,
-    hashed_password VARCHAR(255) NOT NULL,
-    full_name       VARCHAR(255) NOT NULL,
-    role            user_role NOT NULL DEFAULT 'INSPECTOR',
-    employee_id     VARCHAR(100),
-    department      VARCHAR(255),
-    phone           VARCHAR(20),
-    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
-    last_login      TIMESTAMP WITH TIME ZONE,
-    created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: user_role; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.user_role AS ENUM (
+    'ADMIN',
+    'INSPECTOR',
+    'VIEWER'
 );
 
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_role ON users(role);
 
--- Products
-CREATE TABLE IF NOT EXISTS products (
-    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name                 VARCHAR(500) NOT NULL,
-    category             VARCHAR(255),
-    brand                VARCHAR(255),
-    barcode              VARCHAR(100),
-    description          TEXT,
-    manufacturer_name    VARCHAR(500),
-    manufacturer_address TEXT,
-    country_of_origin    VARCHAR(100),
-    created_by_id        UUID REFERENCES users(id) ON DELETE SET NULL,
-    created_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: violation_severity; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.violation_severity AS ENUM (
+    'HIGH',
+    'MEDIUM',
+    'LOW',
+    'INFO'
 );
 
-CREATE INDEX idx_products_barcode ON products(barcode);
-CREATE INDEX idx_products_category ON products(category);
-CREATE INDEX idx_products_name ON products USING gin(to_tsvector('english', name));
 
--- Inspections
-CREATE TABLE IF NOT EXISTS inspections (
-    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    inspection_number       VARCHAR(50) UNIQUE NOT NULL,
-    status                  inspection_status NOT NULL DEFAULT 'DRAFT',
-    overall_compliance_status compliance_status NOT NULL DEFAULT 'PENDING',
-    product_id              UUID REFERENCES products(id) ON DELETE RESTRICT,
-    inspector_id            UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    ai_pipeline_status      pipeline_status NOT NULL DEFAULT 'NOT_STARTED',
-    ai_confidence_score     FLOAT,
-    remarks                 TEXT,
-    location                VARCHAR(500),
-    started_at              TIMESTAMP WITH TIME ZONE,
-    completed_at            TIMESTAMP WITH TIME ZONE,
-    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: violation_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.violation_status AS ENUM (
+    'OPEN',
+    'ACKNOWLEDGED',
+    'RESOLVED',
+    'FALSE_POSITIVE'
 );
 
-CREATE INDEX idx_inspections_status ON inspections(status);
-CREATE INDEX idx_inspections_product_id ON inspections(product_id);
-CREATE INDEX idx_inspections_inspector_id ON inspections(inspector_id);
-CREATE INDEX idx_inspections_compliance ON inspections(overall_compliance_status);
-CREATE INDEX idx_inspections_created_at ON inspections(created_at DESC);
 
--- Inspection Images
-CREATE TABLE IF NOT EXISTS inspection_images (
-    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    inspection_id     UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
-    image_path        VARCHAR(1000) NOT NULL,
-    label             image_label NOT NULL DEFAULT 'OTHER',
-    original_filename VARCHAR(500),
-    file_size         BIGINT,
-    mime_type         VARCHAR(100),
-    width             INTEGER,
-    height            INTEGER,
-    processing_status processing_status NOT NULL DEFAULT 'PENDING',
-    processed_at      TIMESTAMP WITH TIME ZONE,
-    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: alembic_version; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.alembic_version (
+    version_num character varying(32) NOT NULL
 );
 
-CREATE INDEX idx_images_inspection_id ON inspection_images(inspection_id);
 
--- Declarations (extracted from images)
-CREATE TABLE IF NOT EXISTS declarations (
-    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    inspection_id     UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
-    image_id          UUID REFERENCES inspection_images(id) ON DELETE SET NULL,
-    field_name        VARCHAR(100) NOT NULL,  -- mrp, net_quantity, manufacturer, etc.
-    field_value       TEXT,
-    raw_text          TEXT,
-    confidence_score  FLOAT,
-    bounding_box      JSONB,  -- {"x": 10, "y": 20, "width": 100, "height": 30}
-    extraction_method VARCHAR(100),  -- paddleocr, manual, stub
-    is_verified       BOOLEAN NOT NULL DEFAULT FALSE,
-    verified_by_id    UUID REFERENCES users(id),
-    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: declarations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.declarations (
+    id uuid NOT NULL,
+    inspection_id uuid NOT NULL,
+    image_id uuid,
+    field_name character varying(100) NOT NULL,
+    field_value text,
+    raw_text text,
+    confidence_score double precision,
+    bounding_box jsonb,
+    extraction_method character varying(100),
+    is_verified boolean NOT NULL,
+    verified_by_id uuid,
+    created_at timestamp with time zone NOT NULL
 );
 
-CREATE INDEX idx_declarations_inspection_id ON declarations(inspection_id);
-CREATE INDEX idx_declarations_field_name ON declarations(field_name);
 
--- OCR Regions (raw text regions detected on images)
-CREATE TABLE IF NOT EXISTS ocr_regions (
-    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    inspection_id    UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
-    image_id         UUID REFERENCES inspection_images(id) ON DELETE SET NULL,
-    text             TEXT NOT NULL,
-    confidence_score FLOAT,
-    bounding_box     JSONB,
-    language         VARCHAR(50),
-    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: inspection_images; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inspection_images (
+    id uuid NOT NULL,
+    inspection_id uuid NOT NULL,
+    image_path character varying(1000) NOT NULL,
+    label public.image_label NOT NULL,
+    original_filename character varying(500),
+    file_size bigint,
+    mime_type character varying(100),
+    width integer,
+    height integer,
+    processing_status public.processing_status NOT NULL,
+    processed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL
 );
 
-CREATE INDEX idx_ocr_regions_inspection_id ON ocr_regions(inspection_id);
-CREATE INDEX idx_ocr_regions_image_id ON ocr_regions(image_id);
 
--- Compliance Rules
-CREATE TABLE IF NOT EXISTS rules (
-    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    rule_id           VARCHAR(50) UNIQUE NOT NULL,  -- e.g., MRP-001
-    field             VARCHAR(100) NOT NULL,
-    category          VARCHAR(255),  -- NULL = applies to all
-    mandatory         BOOLEAN NOT NULL DEFAULT TRUE,
-    severity          violation_severity NOT NULL DEFAULT 'HIGH',
-    description       TEXT NOT NULL,
-    validation_logic  JSONB,
-    legal_reference   TEXT,
-    rule_version      VARCHAR(20) NOT NULL DEFAULT '1.0',
-    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: inspections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inspections (
+    id uuid NOT NULL,
+    inspection_number character varying(50) NOT NULL,
+    status public.inspection_status NOT NULL,
+    overall_compliance_status public.compliance_status NOT NULL,
+    product_id uuid,
+    inspector_id uuid NOT NULL,
+    ai_pipeline_status public.pipeline_status NOT NULL,
+    ai_confidence_score double precision,
+    remarks text,
+    location character varying(500),
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
 );
 
-CREATE INDEX idx_rules_rule_id ON rules(rule_id);
-CREATE INDEX idx_rules_field ON rules(field);
-CREATE INDEX idx_rules_is_active ON rules(is_active);
 
--- Violations
-CREATE TABLE IF NOT EXISTS violations (
-    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    inspection_id    UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
-    rule_id          UUID REFERENCES rules(id) ON DELETE SET NULL,
-    declaration_id   UUID REFERENCES declarations(id) ON DELETE SET NULL,
-    severity         violation_severity NOT NULL,
-    status           violation_status NOT NULL DEFAULT 'OPEN',
-    description      TEXT NOT NULL,
-    legal_reference  TEXT,
-    evidence_region  JSONB,
-    notes            TEXT,
-    resolved_at      TIMESTAMP WITH TIME ZONE,
-    resolved_by_id   UUID REFERENCES users(id),
-    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: ocr_regions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ocr_regions (
+    id uuid NOT NULL,
+    inspection_id uuid NOT NULL,
+    image_id uuid,
+    text text NOT NULL,
+    confidence_score double precision,
+    bounding_box jsonb,
+    language character varying(50),
+    created_at timestamp with time zone NOT NULL
 );
 
-CREATE INDEX idx_violations_inspection_id ON violations(inspection_id);
-CREATE INDEX idx_violations_severity ON violations(severity);
-CREATE INDEX idx_violations_status ON violations(status);
 
--- Reports
-CREATE TABLE IF NOT EXISTS reports (
-    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    inspection_id     UUID NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
-    report_type       report_type NOT NULL DEFAULT 'PDF',
-    file_path         VARCHAR(1000),
-    generation_status report_status NOT NULL DEFAULT 'PENDING',
-    generated_by_id   UUID REFERENCES users(id),
-    generated_at      TIMESTAMP WITH TIME ZONE,
-    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+--
+-- Name: products; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.products (
+    id uuid NOT NULL,
+    name character varying(500) NOT NULL,
+    category character varying(255),
+    brand character varying(255),
+    barcode character varying(100),
+    description text,
+    manufacturer_name character varying(500),
+    manufacturer_address text,
+    country_of_origin character varying(100),
+    created_by_id uuid,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
 );
 
-CREATE INDEX idx_reports_inspection_id ON reports(inspection_id);
 
--- =============================================================================
--- TRIGGERS: updated_at auto-update
--- =============================================================================
+--
+-- Name: reports; Type: TABLE; Schema: public; Owner: -
+--
 
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
+CREATE TABLE public.reports (
+    id uuid NOT NULL,
+    inspection_id uuid NOT NULL,
+    report_type public.report_type NOT NULL,
+    file_path character varying(1000),
+    generation_status public.report_status NOT NULL,
+    generated_by_id uuid,
+    generated_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL
+);
 
-CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+--
+-- Name: rules; Type: TABLE; Schema: public; Owner: -
+--
 
-CREATE TRIGGER update_inspections_updated_at BEFORE UPDATE ON inspections
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TABLE public.rules (
+    id uuid NOT NULL,
+    rule_id character varying(50) NOT NULL,
+    field character varying(100) NOT NULL,
+    category character varying(255),
+    mandatory boolean NOT NULL,
+    severity public.violation_severity NOT NULL,
+    description text NOT NULL,
+    validation_logic jsonb,
+    legal_reference text,
+    rule_version character varying(20) NOT NULL,
+    is_active boolean NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    package_type character varying(20) DEFAULT 'retail'::character varying NOT NULL,
+    citation_verified boolean DEFAULT false NOT NULL
+);
 
-CREATE TRIGGER update_rules_updated_at BEFORE UPDATE ON rules
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+--
+-- Name: users; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.users (
+    id uuid NOT NULL,
+    email character varying(255) NOT NULL,
+    hashed_password character varying(255) NOT NULL,
+    full_name character varying(255) NOT NULL,
+    role public.user_role NOT NULL,
+    employee_id character varying(100),
+    department character varying(255),
+    phone character varying(20),
+    is_active boolean NOT NULL,
+    last_login timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: violations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.violations (
+    id uuid NOT NULL,
+    inspection_id uuid NOT NULL,
+    rule_id uuid,
+    declaration_id uuid,
+    severity public.violation_severity NOT NULL,
+    status public.violation_status NOT NULL,
+    description text NOT NULL,
+    legal_reference text,
+    evidence_region jsonb,
+    notes text,
+    resolved_at timestamp with time zone,
+    resolved_by_id uuid,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: alembic_version alembic_version_pkc; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.alembic_version
+    ADD CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num);
+
+
+--
+-- Name: declarations declarations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.declarations
+    ADD CONSTRAINT declarations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: inspection_images inspection_images_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inspection_images
+    ADD CONSTRAINT inspection_images_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: inspections inspections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inspections
+    ADD CONSTRAINT inspections_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ocr_regions ocr_regions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ocr_regions
+    ADD CONSTRAINT ocr_regions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: reports reports_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reports
+    ADD CONSTRAINT reports_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: rules rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rules
+    ADD CONSTRAINT rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: violations violations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.violations
+    ADD CONSTRAINT violations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ix_declarations_field_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_declarations_field_name ON public.declarations USING btree (field_name);
+
+
+--
+-- Name: ix_inspections_inspection_number; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_inspections_inspection_number ON public.inspections USING btree (inspection_number);
+
+
+--
+-- Name: ix_ocr_regions_image_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_ocr_regions_image_id ON public.ocr_regions USING btree (image_id);
+
+
+--
+-- Name: ix_ocr_regions_inspection_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_ocr_regions_inspection_id ON public.ocr_regions USING btree (inspection_id);
+
+
+--
+-- Name: ix_products_barcode; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_products_barcode ON public.products USING btree (barcode);
+
+
+--
+-- Name: ix_products_category; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_products_category ON public.products USING btree (category);
+
+
+--
+-- Name: ix_rules_field; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_rules_field ON public.rules USING btree (field);
+
+
+--
+-- Name: ix_rules_rule_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_rules_rule_id ON public.rules USING btree (rule_id);
+
+
+--
+-- Name: ix_users_email; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_users_email ON public.users USING btree (email);
+
+
+--
+-- Name: declarations declarations_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.declarations
+    ADD CONSTRAINT declarations_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.inspection_images(id) ON DELETE SET NULL;
+
+
+--
+-- Name: declarations declarations_inspection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.declarations
+    ADD CONSTRAINT declarations_inspection_id_fkey FOREIGN KEY (inspection_id) REFERENCES public.inspections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: declarations declarations_verified_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.declarations
+    ADD CONSTRAINT declarations_verified_by_id_fkey FOREIGN KEY (verified_by_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: inspection_images inspection_images_inspection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inspection_images
+    ADD CONSTRAINT inspection_images_inspection_id_fkey FOREIGN KEY (inspection_id) REFERENCES public.inspections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inspections inspections_inspector_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inspections
+    ADD CONSTRAINT inspections_inspector_id_fkey FOREIGN KEY (inspector_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: inspections inspections_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inspections
+    ADD CONSTRAINT inspections_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ocr_regions ocr_regions_image_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ocr_regions
+    ADD CONSTRAINT ocr_regions_image_id_fkey FOREIGN KEY (image_id) REFERENCES public.inspection_images(id) ON DELETE SET NULL;
+
+
+--
+-- Name: ocr_regions ocr_regions_inspection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ocr_regions
+    ADD CONSTRAINT ocr_regions_inspection_id_fkey FOREIGN KEY (inspection_id) REFERENCES public.inspections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: products products_created_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.products
+    ADD CONSTRAINT products_created_by_id_fkey FOREIGN KEY (created_by_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: reports reports_generated_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reports
+    ADD CONSTRAINT reports_generated_by_id_fkey FOREIGN KEY (generated_by_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: reports reports_inspection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reports
+    ADD CONSTRAINT reports_inspection_id_fkey FOREIGN KEY (inspection_id) REFERENCES public.inspections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: violations violations_declaration_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.violations
+    ADD CONSTRAINT violations_declaration_id_fkey FOREIGN KEY (declaration_id) REFERENCES public.declarations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: violations violations_inspection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.violations
+    ADD CONSTRAINT violations_inspection_id_fkey FOREIGN KEY (inspection_id) REFERENCES public.inspections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: violations violations_resolved_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.violations
+    ADD CONSTRAINT violations_resolved_by_id_fkey FOREIGN KEY (resolved_by_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: violations violations_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.violations
+    ADD CONSTRAINT violations_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.rules(id) ON DELETE SET NULL;
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict E3mtFCBKXtO9CoXP4xEgGhraRI3HyPQxmogUXWvGEBU9Gc2hqrxkdCOv4RkHTQW
+

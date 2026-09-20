@@ -25,8 +25,23 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url with env setting
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+import os
+
+# Resolve database URL: programmatic override (if explicitly changed) > env var > settings > default
+configured_url = config.get_main_option("sqlalchemy.url")
+default_ini_url = "postgresql+asyncpg://lmis_user:changeme@localhost:5432/legal_metrology_db"
+
+if configured_url and configured_url != default_ini_url:
+    target_url = configured_url
+elif os.environ.get("DATABASE_URL"):
+    target_url = os.environ["DATABASE_URL"]
+elif settings and getattr(settings, "DATABASE_URL", None):
+    target_url = settings.DATABASE_URL
+else:
+    target_url = configured_url
+
+if target_url:
+    config.set_main_option("sqlalchemy.url", target_url)
 
 
 def run_migrations_offline() -> None:
@@ -59,7 +74,18 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, run_async_migrations())
+            future.result()
+    else:
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

@@ -1,4 +1,4 @@
-.PHONY: help up down build logs db-shell backend-shell migrate seed test-backend test-frontend lint
+.PHONY: help up down build logs db-shell backend-shell migrate seed dump-schema test-backend test-frontend lint
 
 # Default target
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  backend-shell   Open bash shell in backend container"
 	@echo "  migrate         Run Alembic database migrations"
 	@echo "  seed            Seed the database with initial data"
+	@echo "  dump-schema     Dump canonical schema artifact from migrated DB"
 	@echo "  test-backend    Run backend tests"
 	@echo "  test-frontend   Run frontend tests"
 	@echo "  lint            Run linters on all code"
@@ -42,6 +43,9 @@ migrate:
 
 seed:
 	docker compose exec backend python -m app.scripts.seed
+
+dump-schema:
+	docker compose exec -T db pg_dump -U $${POSTGRES_USER:-lmis_user} -d $${POSTGRES_DB:-legal_metrology_db} --schema-only --no-owner --no-privileges > database/schema.sql
 
 test-backend:
 	cd backend && python -m pytest tests/ -v

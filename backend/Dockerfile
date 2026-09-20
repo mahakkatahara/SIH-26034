@@ -15,10 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
-# Create uploads directory
-RUN mkdir -p /app/uploads
+# Create uploads directory and make entrypoint executable
+RUN mkdir -p /app/uploads && chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 
-# Development: hot-reload with uvicorn
+# Entrypoint runs migrations and idempotent seed before starting server
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
