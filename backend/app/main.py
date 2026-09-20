@@ -24,13 +24,6 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Legal Metrology Inspection System", version=settings.APP_VERSION)
 
-    # Ensure tables exist
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-    except Exception as exc:
-        logger.warning("Table initialization check failed", error=str(exc))
-
     # Create upload directory if it doesn't exist
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     logger.info("Upload directory ready", path=settings.UPLOAD_DIR)

@@ -2,109 +2,105 @@
 
 ## Overview
 
-This module contains the AI/Computer Vision pipeline for extracting and
-analyzing declarations from packaged commodity images.
+This module contains the Computer Vision and Multimodal AI extraction pipeline for extracting mandatory declarations and spatial text regions from packaged commodity images.
+
+- **Active Engine:** `VisionPipeline` (`ai/pipeline/vision_pipeline.py`) utilizing Google Gemini Vision (`google-genai` SDK, `gemini-2.5-flash` or `gemini-3.5-flash-lite`).
+- **Offline / Dev Fallback:** `StubPipeline` (`ai/pipeline/stub_pipeline.py`) for development and air-gapped testing.
+- **Planned Local Alternative:** On-premise OCR using PaddleOCR is planned for air-gapped deployments where external image transmission is restricted.
+
+---
 
 ## Pipeline Architecture
 
 ```
-Image File
+Package Image File
     │
-    ▼ BasePreprocessor (ai/pipeline/base.py)
-    │  - Noise reduction
-    │  - Deskewing / perspective correction
-    │  - Contrast enhancement
-    │  - ROI detection
+    ▼ VisionPipeline.analyze(image_path, image_id)
+    │  - Format detection (JPEG, PNG, WebP, TIFF)
+    │  - Reads image bytes
     │
-    ▼ BaseOCREngine (ai/pipeline/base.py)
-    │  - Text detection (bounding boxes)
-    │  - Text recognition
-    │  - Confidence scores per region
+    ▼ Google Gemini Vision (google-genai SDK)
+    │  - Model: gemini-2.5-flash (configurable via VISION_MODEL)
+    │  - Structured JSON schema enforcement (PackageLabelAnalysis)
+    │  - Zero-hallucination policy: missing declarations return null with confidence 0.0
+    │  - Returns bounding boxes [x1, y1, x2, y2] for declarations & OCR text regions
     │
-    ▼ BaseExtractor (ai/pipeline/base.py)
-    │  - Map OCR text → structured declarations
-    │  - Field: mrp, net_quantity, manufacturer_name, etc.
-    │  - Normalize values (currency, units, dates)
+    ▼ Domain-Specific Normalizers (ai/pipeline/vision_pipeline.py)
+    │  - normalize_mrp(): Currency symbol stripping (₹, Rs., INR) → clean numeric float
+    │  - normalize_quantity(): Net quantity parsing → {amount: float, unit: str} with SI unit mapping
+    │  - normalize_date(): Date normalization → ISO 8601 (YYYY-MM-DD) or flags ambiguous dates
     │
     ▼ PipelineResult
-       - Passed to rule engine (in backend service layer)
-       - Rule engine is DETERMINISTIC (not AI)
+       - Structured declarations with bounding boxes & confidence scores
+       - OCR text regions with spatial coordinates
+       - Consumed by the deterministic RuleEngine (rule-engine/engine.py)
 ```
+
+---
 
 ## Current Implementation Status
 
-| Component | Status | Phase |
-|-----------|--------|-------|
-| `StubPipeline` | ✅ Available | Phase 1 |
-| `OpenCVPreprocessor` | 🔲 Planned | Phase 2 |
-| `PaddleOCREngine` | 🔲 Planned | Phase 2 |
-| `RegexExtractor` | 🔲 Planned | Phase 3 |
-| Font size analysis | 🔲 Planned | Phase 6 |
-| RAG / LLM assistant | 🔲 Planned | Phase 7 |
+| Component | Status | Phase | Details |
+|-----------|--------|-------|---------|
+| `VisionPipeline` | ✅ **Complete** | Phase 2 | Real vision extraction via Google Gemini Vision (`gemini-2.5-flash`) |
+| Structured Extraction Schema | ✅ **Complete** | Phase 3 | Pydantic `PackageLabelAnalysis` extracting 11+ statutory declarations |
+| Normalization Utilities | ✅ **Complete** | Phase 3 | `normalize_mrp`, `normalize_quantity`, `normalize_date` |
+| `StubPipeline` | ✅ **Complete** | Phase 1 | Offline/dev fallback (`DEV_STUB`, flags `NEEDS_REVIEW`) |
+| Visual Evidence Coordinates | ✅ **Complete** | Phase 5 | Bounding boxes stored in DB and displayed on frontend canvas |
+| Font Size Calibration | 🟡 **In Progress** | Phase 6 | `FONT-001` rule implemented; physical mm calibration against DPI/distance pending |
+| RAG / LLM Assistant | 🔲 Planned | Phase 7 | Natural language statutory guidance (NOT decision-maker) |
+| `PaddleOCREngine` | 🔲 Planned | Future | Local / air-gapped on-premise alternative |
 
-## Phase 1 — Stub
+---
 
-The `StubPipeline` in `pipeline/stub_pipeline.py` returns a clearly marked
-`DEV_STUB` result with no real analysis. Every stub result includes:
+## External Gemini Dependency & Network Behavior
 
-```python
-PipelineResult(
-    pipeline_status="DEV_STUB",
-    notice="⚠ AI PIPELINE NOT IMPLEMENTED ...",
-    declarations=[],
-    ocr_regions=[],
-)
-```
+1. **API Key Requirement:**
+   The real extraction pipeline requires a valid `GEMINI_API_KEY` set in your `.env` file and configured in `app.core.config.settings`.
+2. **Network Transmission:**
+   Image bytes are transmitted over HTTPS to Google's Generative Language API endpoint (`generativelanguage.googleapis.com`). Ensure outbound HTTPS access is permitted by your firewall.
+3. **Missing Key or Network Failure:**
+   - When `AI_PIPELINE_MODE=vision`, network interruptions or invalid keys cause `VisionPipeline` to raise an exception, which the backend catches and surfaces as an `HTTP 502 Bad Gateway` error while updating inspection status to `FAILED`.
+   - When `AI_PIPELINE_MODE=stub`, the system runs completely offline via `StubPipeline`, returning `pipeline_status="DEV_STUB"` and setting overall compliance to `NEEDS_REVIEW` to ensure that placeholder data is never mistaken for compliance.
 
-## Implementing Phase 2 (PaddleOCR)
+---
 
-To integrate PaddleOCR:
+## Mandatory Declared Fields Extracted
 
-1. Implement `BaseOCREngine` in `pipeline/ocr_engine.py`
-2. Implement `BasePreprocessor` in `pipeline/preprocessor.py`
-3. Create `PaddleOCRPipeline(BasePipeline)` in `pipeline/paddleocr_pipeline.py`
-4. Update `get_pipeline()` in `stub_pipeline.py` to return the new pipeline
-5. Set `AI_PIPELINE_MODE=paddleocr` in `.env`
+The extraction pipeline captures 11+ declaration fields defined by the Legal Metrology (Packaged Commodities) Rules, 2011:
 
-### Interface Contract
+| Field Name | Legal Metrology Declaration | Statutory Reference |
+|------------|----------------------------|---------------------|
+| `commodity_name` | Generic / Common Name of Commodity | Rule 6(1)(a) |
+| `net_quantity` | Net Quantity (Weight, Measure, or Number) | Rule 6(1)(b) |
+| `manufacturer_name` | Name of Manufacturer / Packer / Importer | Rule 6(1)(c) |
+| `manufacturer_address` | Complete Address of Manufacturer / Packer | Rule 6(1)(c) |
+| `manufacturing_date` | Month and Year of Manufacture / Packing | Rule 6(1)(e) |
+| `best_before_date` | Expiry / Best Before Date (if applicable) | Rule 6(1)(e) proviso |
+| `mrp` | Maximum Retail Price (inclusive of all taxes) | Rule 6(1)(f) |
+| `consumer_care_info` | Name, Address, Phone, Email for Complaints | Rule 6(1)(l) |
+| `country_of_origin` | Country of Origin (for imported commodities) | Rule 6(1)(k) |
+| `batch_number` | Batch / Lot / Code Number | Rule 6(1)(g) / FSSAI |
+| `unit_sale_price` | Unit Sale Price (per g/ml/piece where applicable) | Rule 6(1)(n) |
 
-```python
-class MyOCREngine(BaseOCREngine):
-    def recognize(self, image: np.ndarray) -> List[OCRTextRegion]:
-        # image is BGR numpy array from OpenCV
-        # return list of OCRTextRegion with text + bounding_box + confidence
-        ...
-```
-
-## Declared Fields
-
-The extraction pipeline targets these mandatory declaration fields:
-
-| field_name | Legal Metrology Field | Rule |
-|------------|-----------------------|------|
-| `mrp` | Maximum Retail Price | Rule 6(1)(f) |
-| `net_quantity` | Net Quantity | Rule 6(1)(b) |
-| `manufacturer_name` | Manufacturer/Packer Name | Rule 6(1)(c) |
-| `manufacturer_address` | Manufacturer Address | Rule 6(1)(c) |
-| `manufacturing_date` | Date of Manufacturing/Packing | Rule 6(1)(e) |
-| `consumer_care_info` | Consumer Care Contact | Rule 6(1)(l) |
-| `country_of_origin` | Country of Origin | Rule 6(1)(k) |
+---
 
 ## Design Principle
 
-> **The AI pipeline is NOT the legal decision-maker.**
-> 
-> The pipeline outputs structured `PipelineResult` data.
-> The **deterministic rule engine** (in `/rule-engine/`) makes compliance decisions.
-> LLM/RAG (Phase 7) is used only for natural-language explanation of violations.
+> **The AI pipeline is NEVER the legal decision-maker.**
+>
+> The AI pipeline acts purely as a sensory extraction layer, translating raw packaging pixels into structured declaration data and bounding box coordinates.
+> All compliance decisions (`COMPLIANT`, `NON_COMPLIANT`, `WARNING`, `NEEDS_REVIEW`) are made exclusively by the **deterministic rule engine** in `/rule-engine/engine.py`.
+> An LLM never adjudicates whether a product complies with Indian law.
+
+---
 
 ## Requirements
 
 ```
-# Phase 2+ requirements (not needed for Phase 1 stub)
-paddlepaddle>=2.6.0
-paddleocr>=2.7.0
-opencv-python>=4.9.0
-numpy>=1.26.0
+# Multimodal extraction dependencies
+google-genai>=1.0.0
+pydantic>=2.0.0
 Pillow>=10.0.0
+numpy>=1.26.0
 ```
