@@ -3,6 +3,7 @@ Violation ORM Model — compliance violations detected by the rule engine
 """
 import uuid
 from datetime import datetime, timezone
+from typing import ClassVar
 from sqlalchemy import String, Text, ForeignKey, DateTime, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -55,5 +56,21 @@ class Violation(Base):
     rule = relationship("Rule", back_populates="violations")
     declaration = relationship("Declaration", back_populates="violations")
 
+    _citation_verified: ClassVar[bool | None] = None
+
+    @property
+    def citation_verified(self) -> bool:
+        if self._citation_verified is not None:
+            return self._citation_verified
+        try:
+            return bool(self.rule.citation_verified) if self.rule else False
+        except Exception:
+            return False
+
+    @citation_verified.setter
+    def citation_verified(self, value: bool) -> None:
+        self._citation_verified = value
+
     def __repr__(self) -> str:
         return f"<Violation id={self.id} severity={self.severity} status={self.status}>"
+

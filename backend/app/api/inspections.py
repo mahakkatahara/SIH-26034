@@ -11,7 +11,7 @@ from typing import Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -284,9 +284,14 @@ async def analyze_inspection(
 
     # Real Vision Pipeline Mode
     start_time = time.time()
+
+    # Ensure re-analysis is idempotent: clean up previous analysis records in the same transaction
+    await db.execute(delete(Violation).where(Violation.inspection_id == inspection_id))
+    await db.execute(delete(Declaration).where(Declaration.inspection_id == inspection_id))
+    await db.execute(delete(OCRRegion).where(OCRRegion.inspection_id == inspection_id))
+
     all_saved_declarations = []
     all_saved_ocr_regions = []
-    all_field_confidences = []
 
     for img in inspection.images:
         # Resolve image file location
@@ -322,9 +327,9 @@ async def analyze_inspection(
                 bounding_box=bbox_dict,
                 extraction_method=decl.extraction_method or "gemini_vision",
             )
+            decl_record.panel = img.label
             db.add(decl_record)
             all_saved_declarations.append(decl_record)
-            all_field_confidences.append(decl.confidence)
 
         # Persist OCR Regions
         for region in pipeline_result.ocr_regions:
@@ -343,15 +348,23 @@ async def analyze_inspection(
         img.processing_status = "COMPLETED"
         img.processed_at = datetime.now(timezone.utc)
 
-    # Compute mean confidence score
+    # Compute mean confidence score over extracted fields only (non-null and confidence > 0.0)
+    extracted_confidences = [
+        d.confidence_score
+        for d in all_saved_declarations
+        if d.field_value is not None and str(d.field_value).strip() and (d.confidence_score or 0.0) > 0.0
+    ]
     mean_confidence = (
-        float(sum(all_field_confidences) / len(all_field_confidences))
-        if all_field_confidences
+        float(sum(extracted_confidences) / len(extracted_confidences))
+        if extracted_confidences
         else 0.0
     )
 
     # Flush to generate IDs for new declarations
     await db.flush()
+
+    # Map image_id to image label (panel)
+    img_label_map = {img.id: img.label for img in inspection.images}
 
     # Run deterministic rule engine
     rule_engine = get_rule_engine()
@@ -359,6 +372,8 @@ async def analyze_inspection(
         {
             "id": str(d.id) if d.id else None,
             "declaration_id": str(d.id) if d.id else None,
+            "image_id": str(d.image_id) if d.image_id else None,
+            "panel": img_label_map.get(d.image_id),
             "field_name": d.field_name,
             "field_value": d.field_value,
             "raw_text": d.raw_text,
@@ -368,12 +383,23 @@ async def analyze_inspection(
         for d in all_saved_declarations
     ]
     product_category = getattr(inspection.product, "category", None) if inspection.product else None
+    product_pkg_type = getattr(inspection.product, "package_type", "retail") if inspection.product else "retail"
+    is_perishable = False
+    if product_category and str(product_category).lower() in ("food", "perishable", "beverage", "grocery"):
+        is_perishable = True
+    elif inspection.product and getattr(inspection.product, "is_perishable", False):
+        is_perishable = True
+
     compliance_result = rule_engine.evaluate(
         declarations=decl_dicts,
         product_category=product_category,
-        product_context={},
+        product_context={
+            "package_type": product_pkg_type or "retail",
+            "is_perishable": is_perishable,
+        },
         overall_confidence=mean_confidence,
         confidence_threshold=settings.AI_CONFIDENCE_THRESHOLD,
+        package_type=product_pkg_type or "retail",
     )
 
     # Fetch DB rules for mapping rule_id string (e.g. MRP-001) to rule UUID
@@ -399,6 +425,7 @@ async def analyze_inspection(
             legal_reference=issue.legal_reference,
             evidence_region=issue.evidence,
         )
+        v_rec.citation_verified = getattr(issue, "citation_verified", False)
         db.add(v_rec)
         all_saved_violations.append(v_rec)
 

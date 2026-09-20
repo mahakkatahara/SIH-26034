@@ -45,6 +45,7 @@ class DeclarationResponse(BaseModel):
     id: UUID
     inspection_id: UUID
     image_id: Optional[UUID] = None
+    panel: Optional[str] = None
     field_name: str
     field_value: Optional[str] = None
     raw_text: Optional[str] = None
@@ -79,6 +80,7 @@ class ViolationResponse(BaseModel):
     status: str
     description: str
     legal_reference: Optional[str] = None
+    citation_verified: bool = False
     evidence_region: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
     created_at: datetime

@@ -3,6 +3,7 @@ Declaration ORM Model — extracted declarations from package images
 """
 import uuid
 from datetime import datetime, timezone
+from typing import ClassVar
 from sqlalchemy import String, Text, Float, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -48,5 +49,21 @@ class Declaration(Base):
     image = relationship("InspectionImage", back_populates="declarations")
     violations = relationship("Violation", back_populates="declaration")
 
+    _panel: ClassVar[str | None] = None
+
+    @property
+    def panel(self) -> str | None:
+        if self._panel is not None:
+            return self._panel
+        try:
+            return self.image.label if self.image else None
+        except Exception:
+            return None
+
+    @panel.setter
+    def panel(self, value: str | None) -> None:
+        self._panel = value
+
     def __repr__(self) -> str:
         return f"<Declaration id={self.id} field={self.field_name} value={self.field_value!r}>"
+

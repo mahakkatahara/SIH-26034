@@ -14,6 +14,7 @@ from ai.pipeline.vision_pipeline import (
     normalize_mrp,
     normalize_quantity,
     normalize_date,
+    parse_bounding_box,
 )
 from ai.pipeline.stub_pipeline import get_pipeline, StubPipeline
 from app.core.config import settings
@@ -309,3 +310,50 @@ async def test_analyze_inspection_vision_mode(client, inspector_token, valid_gem
     assert len(detail["ocr_regions"]) == 2
     assert detail["ai_pipeline_status"] == "COMPLETED"
     assert detail["ai_confidence_score"] > 0.0
+
+
+def test_parse_bounding_box_valid_coordinates():
+    """Valid [x1, y1, x2, y2] coordinates are unpacked into positive width and height."""
+    bbox = parse_bounding_box([10, 20, 210, 60], conf=0.95)
+    assert bbox is not None
+    assert bbox.x == 10.0
+    assert bbox.y == 20.0
+    assert bbox.width == 200.0
+    assert bbox.height == 40.0
+    assert bbox.confidence == 0.95
+
+
+def test_parse_bounding_box_hershey_positive_coordinates():
+    """Exact Hershey run coordinates with positive dimensions produce valid BoundingBox."""
+    bbox = parse_bounding_box([561.0, 761.0, 783.0, 783.0], conf=0.92)
+    assert bbox is not None
+    assert bbox.width > 0.0
+    assert bbox.height > 0.0
+    assert bbox.confidence == 0.92
+
+
+def test_parse_bounding_box_degenerate_rejected():
+    """Degenerate bounding boxes (zero width or zero height) must be rejected and return None."""
+    # Zero height: y1 == y2 (e.g. [561.0, 761.0, 783.0, 761.0])
+    zero_height = parse_bounding_box([561.0, 761.0, 783.0, 761.0], conf=0.90)
+    assert zero_height is None
+
+    # Zero width: x1 == x2 (e.g. [561.0, 761.0, 561.0, 800.0])
+    zero_width = parse_bounding_box([561.0, 761.0, 561.0, 800.0], conf=0.90)
+    assert zero_width is None
+
+    # None or malformed coords
+    assert parse_bounding_box(None) is None
+    assert parse_bounding_box([]) is None
+    assert parse_bounding_box([10, 20]) is None
+
+
+def test_parse_bounding_box_inverted_coordinates_normalized():
+    """Inverted coordinates [x2, y2, x1, y1] are properly normalized to positive width/height."""
+    bbox = parse_bounding_box([210, 60, 10, 20], conf=0.88)
+    assert bbox is not None
+    assert bbox.x == 10.0
+    assert bbox.y == 20.0
+    assert bbox.width == 200.0
+    assert bbox.height == 40.0
+

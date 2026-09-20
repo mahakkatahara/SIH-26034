@@ -100,6 +100,7 @@ class RuleDefinition:
     legal_reference: Optional[str] = None
     citation_verified: bool = False
     category: Optional[str] = None
+    package_type: str = "retail"  # "retail" | "wholesale" | "any"
     rule_version: str = "1.0"
 
 
@@ -115,6 +116,7 @@ class RuleViolation:
     legal_reference: Optional[str] = None
     declaration_id: Optional[str] = None
     evidence: Optional[Dict[str, Any]] = None
+    citation_verified: bool = False
 
 
 @dataclass
@@ -142,6 +144,10 @@ class ComplianceResult:
     is_stub: bool = False
     stub_notice: Optional[str] = None
     notes: List[str] = field(default_factory=list)
+    fields_extracted: int = 0
+    total_mandatory_fields: int = 0
+    coverage_ratio: float = 0.0
+    reconciled_declarations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 class RuleEngine:
@@ -184,20 +190,33 @@ class RuleEngine:
                 legal_reference=r.get("legal_reference"),
                 citation_verified=r.get("citation_verified", False),
                 category=r.get("category"),
+                package_type=r.get("package_type", "retail"),
                 rule_version=r.get("rule_version", "1.0"),
             )
             for r in data
         ]
 
-    def get_rules_for_category(self, category: Optional[str] = None) -> List[RuleDefinition]:
+    def get_rules_for_category(
+        self,
+        category: Optional[str] = None,
+        package_type: Optional[str] = "retail",
+    ) -> List[RuleDefinition]:
         """
-        Return rules applicable to a given product category.
+        Return rules applicable to a given product category and package type.
         Rules with category=None apply to all products.
+        Rules with package_type="any" apply to both retail and wholesale.
         """
-        return [
-            r for r in self.rules
-            if r.category is None or r.category == category
-        ]
+        rules = []
+        for r in self.rules:
+            # Category match
+            if r.category is not None and r.category != category:
+                continue
+            # Package type match ("any" applies to all, else exact match)
+            if package_type is not None:
+                if r.package_type != "any" and r.package_type != package_type:
+                    continue
+            rules.append(r)
+        return rules
 
     def get_all_rules(self) -> List[RuleDefinition]:
         """Return all loaded rules."""
@@ -224,6 +243,8 @@ class RuleEngine:
             bounding_box = decl.get("bounding_box")
             unit = decl.get("unit")
             normalized = decl.get("normalized")
+            image_id = decl.get("image_id")
+            panel = decl.get("panel") or decl.get("panel_id") or decl.get("label")
         else:
             field_name = getattr(decl, "field_name", None)
             field_value = getattr(decl, "field_value", None)
@@ -236,6 +257,8 @@ class RuleEngine:
             bounding_box = getattr(decl, "bounding_box", None)
             unit = getattr(decl, "unit", None)
             normalized = getattr(decl, "normalized", None)
+            image_id = getattr(decl, "image_id", None)
+            panel = getattr(decl, "panel", None) or getattr(decl, "panel_id", None) or getattr(decl, "label", None)
 
         return {
             "field_name": field_name,
@@ -243,6 +266,8 @@ class RuleEngine:
             "raw_text": raw_text,
             "confidence": float(confidence) if confidence is not None else 0.0,
             "declaration_id": str(decl_id) if decl_id else None,
+            "image_id": str(image_id) if image_id else None,
+            "panel": str(panel) if panel is not None else None,
             "is_obscured": bool(is_obscured),
             "bounding_box": bounding_box,
             "unit": unit,
@@ -258,6 +283,75 @@ class RuleEngine:
         if val is None:
             return False
         return len(str(val).strip()) > 0
+
+    def reconcile_declarations(
+        self, declarations: Sequence[Union[Dict[str, Any], Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Reconcile declarations across multiple images and package panels.
+
+        Rules for field reconciliation:
+        1. For each field, select the declaration with the highest confidence score.
+        2. If a candidate declaration is absent (null/empty value) or has confidence <= 0.0,
+           it must NEVER overwrite an already-extracted present declaration.
+        3. If candidate is present and current is absent/empty, candidate replaces current.
+        4. When both candidate and current are present:
+           - If candidate confidence > current confidence: candidate replaces current.
+           - If candidate confidence < current confidence: current is retained.
+           - Tie-break rule (equal confidence):
+             a. Prefer the declaration with longer descriptive text (raw_text or field_value length).
+             b. If text lengths are equal: first-observed declaration is retained (deterministic).
+        5. Preserves image_id and panel provenance for the winning declaration.
+        """
+        reconciled: Dict[str, Dict[str, Any]] = {}
+
+        for d in declarations:
+            candidate = self._normalize_declaration(d)
+            fn = candidate.get("field_name")
+            if not fn:
+                continue
+
+            if fn not in reconciled:
+                reconciled[fn] = candidate
+                continue
+
+            current = reconciled[fn]
+            cand_present = self._is_present(candidate)
+            curr_present = self._is_present(current)
+
+            cand_conf = float(candidate.get("confidence") or 0.0)
+            curr_conf = float(current.get("confidence") or 0.0)
+
+            # Rule 2: Candidate is absent or confidence <= 0.0: never overwrite present current
+            if not cand_present or cand_conf <= 0.0:
+                if curr_present:
+                    continue
+
+            # Rule 3: Candidate is present while current is absent/empty: candidate replaces current
+            if cand_present and not curr_present:
+                reconciled[fn] = candidate
+                continue
+
+            # Rule 4: Both present (or both absent): compare confidence
+            if cand_conf > curr_conf:
+                reconciled[fn] = candidate
+            elif cand_conf < curr_conf:
+                continue
+            else:
+                # Equal confidence tie-break
+                cand_len = max(
+                    len(str(candidate.get("raw_text") or "").strip()),
+                    len(str(candidate.get("field_value") or "").strip()),
+                )
+                curr_len = max(
+                    len(str(current.get("raw_text") or "").strip()),
+                    len(str(current.get("field_value") or "").strip()),
+                )
+                if cand_len > curr_len:
+                    reconciled[fn] = candidate
+                # Otherwise, keep first-observed current (deterministic)
+
+        return reconciled
 
     # ─── Individual Validation Logic Handlers ──────────────────────────────────
 
@@ -287,6 +381,7 @@ class RuleEngine:
             expected="Present and non-empty declaration",
             legal_reference=rule.legal_reference,
             declaration_id=decl_id,
+            citation_verified=rule.citation_verified,
         )
         return RuleEvaluationResult(
             rule_id=rule.rule_id,
@@ -320,6 +415,7 @@ class RuleEngine:
                 expected=f"Pattern: {pattern}",
                 legal_reference=rule.legal_reference,
                 declaration_id=decl_id,
+                citation_verified=rule.citation_verified,
             )
             return RuleEvaluationResult(
                 rule_id=rule.rule_id,
@@ -350,6 +446,7 @@ class RuleEngine:
             expected=f"Format matching regex: {pattern}",
             legal_reference=rule.legal_reference,
             declaration_id=decl_id,
+            citation_verified=rule.citation_verified,
         )
         return RuleEvaluationResult(
             rule_id=rule.rule_id,
@@ -417,6 +514,7 @@ class RuleEngine:
                 expected=f"Standard legal unit from: {sorted(list(set(allowed_units)))}",
                 legal_reference=rule.legal_reference,
                 declaration_id=decl_id,
+                citation_verified=rule.citation_verified,
             )
             return RuleEvaluationResult(
                 rule_id=rule.rule_id,
@@ -447,6 +545,7 @@ class RuleEngine:
             expected=f"Allowed legal units: {sorted(list(set(allowed_units)))}",
             legal_reference=rule.legal_reference,
             declaration_id=decl_id,
+            citation_verified=rule.citation_verified,
         )
         return RuleEvaluationResult(
             rule_id=rule.rule_id,
@@ -495,6 +594,7 @@ class RuleEngine:
             expected=f"Declaration mandatory when {condition_key}=True",
             legal_reference=rule.legal_reference,
             declaration_id=decl_id,
+            citation_verified=rule.citation_verified,
         )
         return RuleEvaluationResult(
             rule_id=rule.rule_id,
@@ -547,6 +647,161 @@ class RuleEngine:
             status=RuleEvaluationStatus.PASSED,
         )
 
+    @staticmethod
+    def _parse_bbox(bbox: Any) -> Optional[List[float]]:
+        """Parses [x1, y1, x2, y2] from a list, tuple, or dict."""
+        if not bbox:
+            return None
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            try:
+                return [float(x) for x in bbox]
+            except (ValueError, TypeError):
+                return None
+        if isinstance(bbox, dict) and all(k in bbox for k in ("x1", "y1", "x2", "y2")):
+            try:
+                return [float(bbox["x1"]), float(bbox["y1"]), float(bbox["x2"]), float(bbox["y2"])]
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    def _check_placement(
+        self,
+        rule: RuleDefinition,
+        decls_by_field: Dict[str, Dict[str, Any]],
+        declarations: List[Dict[str, Any]],
+    ) -> RuleEvaluationResult:
+        """
+        placement_check: Verify that mandatory declarations are grouped together
+        on a single principal display panel.
+        Evaluates stored bounding boxes and panel/image metadata.
+        """
+        target_fields = rule.validation_logic.get("target_fields") or [
+            "commodity_name", "mrp", "net_quantity", "manufacturer_name",
+            "manufacturing_date", "consumer_care_info"
+        ]
+
+        # Gather present target declarations
+        present_decls = [
+            decls_by_field[f]
+            for f in target_fields
+            if f in decls_by_field and self._is_present(decls_by_field[f])
+        ]
+
+        # If 0 or 1 declaration present, placement grouping cannot be violated
+        if len(present_decls) <= 1:
+            return RuleEvaluationResult(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                status=RuleEvaluationStatus.PASSED,
+            )
+
+        # 1. Check explicit panel/image metadata if provided
+        panels = {
+            d["panel"]
+            for d in present_decls
+            if d.get("panel")
+        }
+        if len(panels) > 1:
+            violation = RuleViolation(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                severity=rule.severity,
+                description="Mandatory declarations are distributed across multiple panels/images instead of grouped on a single panel",
+                observed_value=sorted(list(panels)),
+                expected="All mandatory declarations grouped together on one panel",
+                legal_reference=rule.legal_reference,
+                citation_verified=rule.citation_verified,
+            )
+            return RuleEvaluationResult(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                status=RuleEvaluationStatus.FAILED,
+                violation=violation,
+                reason=f"Declarations split across multiple panels: {sorted(list(panels))}",
+            )
+
+        # 2. Check bounding box coordinates
+        bboxes: List[List[float]] = []
+        for d in present_decls:
+            b = self._parse_bbox(d.get("bounding_box"))
+            if b:
+                bboxes.append(b)
+
+        # If no bounding boxes are present across declarations, mark NOT_APPLICABLE
+        # so non-visual / text-only runs do not fail or report false violations
+        if len(bboxes) < 2:
+            return RuleEvaluationResult(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                status=RuleEvaluationStatus.NOT_APPLICABLE,
+                reason="Insufficient bounding box coordinates to verify spatial panel grouping",
+            )
+
+        # Calculate bounding box clusters / spatial separation
+        # Two boxes belong to same cluster if distance between rectangles is <= max_gap
+        min_x = min(b[0] for b in bboxes)
+        min_y = min(b[1] for b in bboxes)
+        max_x = max(b[2] for b in bboxes)
+        max_y = max(b[3] for b in bboxes)
+        span_w = max(1.0, max_x - min_x)
+        span_h = max(1.0, max_y - min_y)
+
+        # Maximum allowed gap between adjacent elements within a single panel
+        max_gap = float(rule.validation_logic.get("max_gap", max(span_w, span_h) * 0.45))
+
+        def rect_dist(r1: List[float], r2: List[float]) -> float:
+            dx = max(0.0, max(r1[0], r2[0]) - min(r1[2], r2[2]))
+            dy = max(0.0, max(r1[1], r2[1]) - min(r1[3], r2[3]))
+            return (dx * dx + dy * dy) ** 0.5
+
+        # Connected components via BFS
+        n = len(bboxes)
+        adj: List[List[int]] = [[] for _ in range(n)]
+        for i in range(n):
+            for j in range(i + 1, n):
+                if rect_dist(bboxes[i], bboxes[j]) <= max_gap:
+                    adj[i].append(j)
+                    adj[j].append(i)
+
+        visited = [False] * n
+        components = 0
+        for i in range(n):
+            if not visited[i]:
+                components += 1
+                queue = [i]
+                visited[i] = True
+                while queue:
+                    curr = queue.pop(0)
+                    for neighbor in adj[curr]:
+                        if not visited[neighbor]:
+                            visited[neighbor] = True
+                            queue.append(neighbor)
+
+        if components > 1:
+            violation = RuleViolation(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                severity=rule.severity,
+                description="Mandatory declarations are separated into disjoint spatial clusters/panels with significant separation",
+                observed_value=f"{components} disjoint clusters across span {span_w:.0f}x{span_h:.0f}px",
+                expected="All mandatory declarations grouped together on a single panel",
+                legal_reference=rule.legal_reference,
+                citation_verified=rule.citation_verified,
+            )
+            return RuleEvaluationResult(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                status=RuleEvaluationStatus.FAILED,
+                violation=violation,
+                reason=f"Found {components} disjoint spatial clusters among mandatory declarations",
+            )
+
+        return RuleEvaluationResult(
+            rule_id=rule.rule_id,
+            field=rule.field,
+            status=RuleEvaluationStatus.PASSED,
+        )
+
     def _check_font_size(
         self,
         rule: RuleDefinition,
@@ -573,6 +828,7 @@ class RuleEngine:
         product_context: Optional[Dict[str, Any]] = None,
         overall_confidence: Optional[float] = None,
         confidence_threshold: float = 0.75,
+        package_type: str = "retail",
     ) -> ComplianceResult:
         """
         Evaluate extracted declarations against applicable rules.
@@ -589,32 +845,21 @@ class RuleEngine:
         Args:
             declarations: List of extracted declarations (dicts or model objects).
             product_category: Optional category for category-specific rule filtering.
-            product_context: Dict with context flags (e.g. is_imported, is_perishable).
+            product_context: Dict with context flags (e.g. is_imported, is_perishable, package_type).
             overall_confidence: Overall extraction confidence score (0.0 to 1.0).
             confidence_threshold: Confidence gate for human review (default 0.75).
+            package_type: Package type ('retail' | 'wholesale' | 'any'). Defaults to 'retail'.
 
         Returns:
             ComplianceResult with status, violations, warnings, and per-rule results.
         """
         ctx = product_context or {}
+        pkg_type = ctx.get("package_type", package_type) or "retail"
 
-        # 1. Map declarations by field name
-        decls_by_field: Dict[str, Dict[str, Any]] = {}
-        confidences: List[float] = []
+        # 1. Map declarations by field name using multi-image reconciliation
+        decls_by_field = self.reconcile_declarations(declarations)
 
-        for d in declarations:
-            norm = self._normalize_declaration(d)
-            fn = norm.get("field_name")
-            if fn:
-                decls_by_field[fn] = norm
-                if norm.get("confidence") is not None:
-                    confidences.append(norm["confidence"])
-
-        # Compute overall confidence if not explicitly passed
-        if overall_confidence is None:
-            overall_confidence = float(sum(confidences) / len(confidences)) if confidences else 1.0
-
-        applicable_rules = self.get_rules_for_category(product_category)
+        applicable_rules = self.get_rules_for_category(product_category, package_type=pkg_type)
 
         # 2. Identify absent mandatory fields
         # Look at all mandatory rules with type 'presence_check'
@@ -622,11 +867,32 @@ class RuleEngine:
             r for r in applicable_rules
             if r.mandatory and r.validation_logic.get("type") == "presence_check"
         ]
-        absent_mandatory_fields = [
-            r.field for r in mandatory_presence_rules
-            if not self._is_present(decls_by_field.get(r.field))
+        mandatory_fields = {r.field for r in mandatory_presence_rules}
+        total_mandatory_fields = len(mandatory_fields)
+        extracted_mandatory_fields = [
+            f for f in mandatory_fields
+            if self._is_present(decls_by_field.get(f))
         ]
-        absent_mandatory_count = len(set(absent_mandatory_fields))
+        absent_mandatory_fields = [
+            f for f in mandatory_fields
+            if f not in extracted_mandatory_fields
+        ]
+        absent_mandatory_count = len(absent_mandatory_fields)
+        fields_extracted = len(extracted_mandatory_fields)
+        coverage_ratio = round(fields_extracted / total_mandatory_fields, 4) if total_mandatory_fields > 0 else 1.0
+
+        # Confidence metric computed over extracted fields only (confidence > 0.00 and non-null value)
+        extracted_confidences = [
+            float(d["confidence"])
+            for d in decls_by_field.values()
+            if self._is_present(d) and (d.get("confidence") or 0.0) > 0.0
+        ]
+        if overall_confidence is None:
+            overall_confidence = (
+                float(sum(extracted_confidences) / len(extracted_confidences))
+                if extracted_confidences
+                else 0.0
+            )
 
         # 3. Evaluate each rule deterministically
         violations: List[RuleViolation] = []
@@ -651,6 +917,8 @@ class RuleEngine:
                 eval_res = self._check_visibility(rule, decl, confidence_threshold)
             elif v_type == "font_size_check":
                 eval_res = self._check_font_size(rule, decl)
+            elif v_type == "placement_check":
+                eval_res = self._check_placement(rule, decls_by_field, list(decls_by_field.values()))
             else:
                 eval_res = self._check_presence(rule, decl)
 
@@ -665,26 +933,25 @@ class RuleEngine:
                 needs_review_reasons.append(f"{rule.rule_id} ({rule.field}): {eval_res.reason}")
 
         # 4. Status Aggregation Logic
-        # Note: Gemini vision model currently self-reports confidence ~0.99 for nearly all fields
-        # (not yet calibrated). The missing-mandatory-field count is the primary protection
-        # against false non-compliance from unphotographed package panels.
-
+        # Differentiate between incomplete inspection (missing panels) vs low extraction confidence (bad photo)
         status: ComplianceStatus
 
         if absent_mandatory_count >= 3:
             # 3 or more mandatory fields are absent: suspect unphotographed panel
             status = ComplianceStatus.NEEDS_REVIEW
             note = (
-                f"{absent_mandatory_count} mandatory fields absent ({', '.join(sorted(set(absent_mandatory_fields)))}). "
-                f"Downgraded to NEEDS_REVIEW as missing fields may reside on unphotographed package panels."
+                f"Incomplete inspection: {absent_mandatory_count} mandatory fields absent "
+                f"({', '.join(sorted(set(absent_mandatory_fields)))}). "
+                f"Downgraded to NEEDS_REVIEW as missing fields may reside on unphotographed package panels. "
+                f"Extracted {fields_extracted}/{total_mandatory_fields} mandatory fields."
             )
             notes.append(note)
         elif overall_confidence < confidence_threshold:
             # Low overall AI confidence gate
             status = ComplianceStatus.NEEDS_REVIEW
             note = (
-                f"Overall extraction confidence ({overall_confidence:.2f}) is below "
-                f"verification threshold ({confidence_threshold:.2f}). Downgraded to NEEDS_REVIEW."
+                f"Low extraction confidence: mean confidence {overall_confidence:.2f} < "
+                f"threshold {confidence_threshold:.2f} (below verification threshold {confidence_threshold:.2f})."
             )
             notes.append(note)
         elif any(r.mandatory and r.severity == ViolationSeverity.HIGH for r in applicable_rules if any(v.rule_id == r.rule_id for v in violations)):
@@ -711,6 +978,10 @@ class RuleEngine:
             is_stub=False,
             stub_notice=None,
             notes=notes,
+            fields_extracted=fields_extracted,
+            total_mandatory_fields=total_mandatory_fields,
+            coverage_ratio=coverage_ratio,
+            reconciled_declarations=decls_by_field,
         )
 
 

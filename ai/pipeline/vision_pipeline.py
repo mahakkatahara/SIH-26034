@@ -254,6 +254,51 @@ def normalize_date(raw_text: Optional[str], value: Optional[str] = None) -> Dict
     return {"iso_date": None, "raw": target, "needs_review": True}
 
 
+def parse_bounding_box(
+    bbox_coords: Optional[List[Union[int, float]]], conf: float = 0.0
+) -> Optional[BoundingBox]:
+    """
+    Parses and validates bounding box coordinates from Gemini Vision output.
+    Rejects degenerate bounding boxes (width <= 0 or height <= 0).
+    Handles both [x1, y1, x2, y2] and [ymin, xmin, ymax, xmax] coordinate orders.
+    """
+    if not bbox_coords or len(bbox_coords) != 4:
+        return None
+    try:
+        c1, c2, c3, c4 = [float(v) for v in bbox_coords]
+        x1, x2 = min(c1, c3), max(c1, c3)
+        y1, y2 = min(c2, c4), max(c2, c4)
+        width = x2 - x1
+        height = y2 - y1
+
+        # Check if coordinates were [ymin, xmin, ymax, xmax]
+        if width <= 0.0 or height <= 0.0:
+            alt_x1, alt_x2 = min(c2, c4), max(c2, c4)
+            alt_y1, alt_y2 = min(c1, c3), max(c1, c3)
+            alt_width = alt_x2 - alt_x1
+            alt_height = alt_y2 - alt_y1
+            if alt_width > 0.0 and alt_height > 0.0:
+                return BoundingBox(
+                    x=alt_x1,
+                    y=alt_y1,
+                    width=alt_width,
+                    height=alt_height,
+                    confidence=conf,
+                )
+            # Truly degenerate (width <= 0 or height <= 0)
+            return None
+
+        return BoundingBox(
+            x=x1,
+            y=y1,
+            width=width,
+            height=height,
+            confidence=conf,
+        )
+    except Exception:
+        return None
+
+
 # ─── Vision Pipeline Implementation ──────────────────────────────────────────
 
 class VisionPipeline(BasePipeline):
@@ -408,16 +453,7 @@ class VisionPipeline(BasePipeline):
             conf = float(field_data.confidence) if val is not None else 0.0
             bbox_coords = field_data.bounding_box
 
-            bbox: Optional[BoundingBox] = None
-            if bbox_coords and len(bbox_coords) == 4:
-                x1, y1, x2, y2 = bbox_coords
-                bbox = BoundingBox(
-                    x=float(x1),
-                    y=float(y1),
-                    width=float(max(0, x2 - x1)),
-                    height=float(max(0, y2 - y1)),
-                    confidence=conf,
-                )
+            bbox = parse_bounding_box(bbox_coords, conf)
 
             # Normalization per field type
             if field_name == "mrp":
@@ -449,16 +485,7 @@ class VisionPipeline(BasePipeline):
         # Convert OCR regions
         ocr_regions: List[OCRTextRegion] = []
         for region in analysis_data.ocr_regions:
-            region_bbox: Optional[BoundingBox] = None
-            if region.bounding_box and len(region.bounding_box) == 4:
-                rx1, ry1, rx2, ry2 = region.bounding_box
-                region_bbox = BoundingBox(
-                    x=float(rx1),
-                    y=float(ry1),
-                    width=float(max(0, rx2 - rx1)),
-                    height=float(max(0, ry2 - ry1)),
-                    confidence=float(region.confidence),
-                )
+            region_bbox = parse_bounding_box(region.bounding_box, float(region.confidence))
             ocr_regions.append(
                 OCRTextRegion(
                     text=region.text,
@@ -467,7 +494,8 @@ class VisionPipeline(BasePipeline):
                 )
             )
 
-        mean_confidence = float(sum(confidences) / len(confidences)) if confidences else 0.0
+        extracted_confs = [c for c in confidences if c > 0.0]
+        mean_confidence = float(sum(extracted_confs) / len(extracted_confs)) if extracted_confs else 0.0
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         return PipelineResult(

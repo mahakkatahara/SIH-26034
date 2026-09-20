@@ -37,6 +37,7 @@ def compliant_declarations():
             "field_value": "Whole Wheat Atta",
             "raw_text": "Whole Wheat Atta",
             "confidence": 0.98,
+            "bounding_box": [100, 50, 400, 80],
         },
         {
             "declaration_id": "decl-2",
@@ -44,6 +45,7 @@ def compliant_declarations():
             "field_value": "450.0",
             "raw_text": "MRP Rs. 450.00 (inclusive of all taxes)",
             "confidence": 0.99,
+            "bounding_box": [100, 90, 350, 120],
         },
         {
             "declaration_id": "decl-3",
@@ -51,6 +53,7 @@ def compliant_declarations():
             "field_value": "5 kg",
             "raw_text": "Net Quantity: 5 kg",
             "confidence": 0.95,
+            "bounding_box": [100, 130, 250, 160],
         },
         {
             "declaration_id": "decl-4",
@@ -58,6 +61,7 @@ def compliant_declarations():
             "field_value": "Pure Agro Foods Private Limited",
             "raw_text": "Manufactured by Pure Agro Foods Private Limited",
             "confidence": 0.96,
+            "bounding_box": [100, 170, 450, 200],
         },
         {
             "declaration_id": "decl-5",
@@ -65,6 +69,7 @@ def compliant_declarations():
             "field_value": "Plot 45, MIDC, Pune 411019, Maharashtra",
             "raw_text": "Plot 45, MIDC, Pune 411019, Maharashtra",
             "confidence": 0.94,
+            "bounding_box": [100, 210, 500, 240],
         },
         {
             "declaration_id": "decl-6",
@@ -72,6 +77,7 @@ def compliant_declarations():
             "field_value": "2024-10",
             "raw_text": "Mfg Date: 10/2024",
             "confidence": 0.97,
+            "bounding_box": [100, 250, 300, 280],
         },
         {
             "declaration_id": "decl-7",
@@ -79,6 +85,15 @@ def compliant_declarations():
             "field_value": "care@pureagro.com, Ph: 1800-123-456",
             "raw_text": "Consumer Care: care@pureagro.com, Ph: 1800-123-456",
             "confidence": 0.95,
+            "bounding_box": [100, 290, 450, 320],
+        },
+        {
+            "declaration_id": "decl-8",
+            "field_name": "batch_number",
+            "field_value": "B-2024-99",
+            "raw_text": "Batch No: B-2024-99",
+            "confidence": 0.97,
+            "bounding_box": [100, 330, 280, 355],
         },
     ]
 
@@ -496,3 +511,505 @@ async def test_analyze_endpoint_missing_mrp_non_compliant(client, inspector_toke
             assert mrp_violation["severity"] == "HIGH"
             assert mrp_violation["status"] == "OPEN"
             assert "Legal Metrology" in str(mrp_violation["legal_reference"])
+
+
+# ─── New Rules & Placement & Package Type Tests ───────────────────────────────
+
+def test_name_001_commodity_name_presence(rule_engine):
+    """Verifies NAME-001: commodity_name presence check with HIGH severity."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "NAME-001")
+    assert rule.mandatory is True
+    assert rule.severity == ViolationSeverity.HIGH
+    assert rule.package_type == "any"
+
+    # Present -> PASSED
+    res_pass = rule_engine._check_presence(
+        rule, {"field_name": "commodity_name", "field_value": "Wheat Flour"}
+    )
+    assert res_pass.status == RuleEvaluationStatus.PASSED
+
+    # Absent -> FAILED
+    res_fail = rule_engine._check_presence(rule, None)
+    assert res_fail.status == RuleEvaluationStatus.FAILED
+    assert res_fail.violation.rule_id == "NAME-001"
+    assert res_fail.violation.severity == ViolationSeverity.HIGH
+
+
+def test_batch_001_batch_number_presence(rule_engine):
+    """Verifies BATCH-001: batch_number presence check with MEDIUM severity."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "BATCH-001")
+    assert rule.mandatory is True
+    assert rule.severity == ViolationSeverity.MEDIUM
+    assert rule.package_type == "retail"
+
+    # Present -> PASSED
+    res_pass = rule_engine._check_presence(
+        rule, {"field_name": "batch_number", "field_value": "LOT-2024-X"}
+    )
+    assert res_pass.status == RuleEvaluationStatus.PASSED
+
+    # Absent -> FAILED
+    res_fail = rule_engine._check_presence(rule, None)
+    assert res_fail.status == RuleEvaluationStatus.FAILED
+    assert res_fail.violation.rule_id == "BATCH-001"
+    assert res_fail.violation.severity == ViolationSeverity.MEDIUM
+
+
+def test_usp_001_conditional_check(rule_engine):
+    """Verifies USP-001: unit sale price conditional check on requires_usp."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "USP-001")
+    assert rule.mandatory is False
+    assert rule.package_type == "retail"
+
+    # Case A: requires_usp is False -> NOT_APPLICABLE
+    res_na = rule_engine._check_conditional(
+        rule, decl=None, product_context={"requires_usp": False}
+    )
+    assert res_na.status == RuleEvaluationStatus.NOT_APPLICABLE
+
+    # Case B: requires_usp is True and field present -> PASSED
+    res_pass = rule_engine._check_conditional(
+        rule,
+        decl={"field_name": "unit_sale_price", "field_value": "₹ 50.00 / kg"},
+        product_context={"requires_usp": True},
+    )
+    assert res_pass.status == RuleEvaluationStatus.PASSED
+
+    # Case C: requires_usp is True but field absent -> FAILED
+    res_fail = rule_engine._check_conditional(
+        rule, decl=None, product_context={"requires_usp": True}
+    )
+    assert res_fail.status == RuleEvaluationStatus.FAILED
+    assert res_fail.violation.rule_id == "USP-001"
+
+
+def test_tax_001_inclusive_of_taxes_format(rule_engine):
+    """Verifies TAX-001: MRP must state inclusive of all taxes."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "TAX-001")
+    assert rule.severity == ViolationSeverity.MEDIUM
+
+    # Matches "inclusive of all taxes"
+    decl_incl = {
+        "field_name": "mrp",
+        "raw_text": "MRP Rs. 500.00 (inclusive of all taxes)",
+        "field_value": "500.00",
+    }
+    assert rule_engine._check_format(rule, decl_incl).status == RuleEvaluationStatus.PASSED
+
+    # Matches "incl. of all taxes"
+    decl_abbr = {
+        "field_name": "mrp",
+        "raw_text": "MRP ₹ 250/- (incl. of all taxes)",
+        "field_value": "250",
+    }
+    assert rule_engine._check_format(rule, decl_abbr).status == RuleEvaluationStatus.PASSED
+
+    # Matches "incl. all taxes"
+    decl_short = {
+        "field_name": "mrp",
+        "raw_text": "₹99 incl. all taxes",
+        "field_value": "99",
+    }
+    assert rule_engine._check_format(rule, decl_short).status == RuleEvaluationStatus.PASSED
+
+    # Non-matching tax wording -> FAILED
+    decl_no_tax = {
+        "field_name": "mrp",
+        "raw_text": "MRP Rs. 100.00",
+        "field_value": "100.00",
+    }
+    res_fail = rule_engine._check_format(rule, decl_no_tax)
+    assert res_fail.status == RuleEvaluationStatus.FAILED
+    assert res_fail.violation.rule_id == "TAX-001"
+
+
+def test_place_001_placement_grouped_passes(rule_engine):
+    """Verifies PLACE-001: clustered bounding boxes on single panel evaluate to PASSED."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "PLACE-001")
+    decls_by_field = {
+        "commodity_name": {
+            "field_name": "commodity_name", "field_value": "Atta", "bounding_box": [100, 50, 400, 80]
+        },
+        "mrp": {
+            "field_name": "mrp", "field_value": "50", "bounding_box": [100, 90, 300, 120]
+        },
+        "net_quantity": {
+            "field_name": "net_quantity", "field_value": "1 kg", "bounding_box": [100, 130, 250, 160]
+        },
+    }
+    res = rule_engine._check_placement(rule, decls_by_field, list(decls_by_field.values()))
+    assert res.status == RuleEvaluationStatus.PASSED
+    assert res.violation is None
+
+
+def test_place_001_placement_split_panels_fails(rule_engine):
+    """Verifies PLACE-001: declarations across distinct panels/disjoint coordinates FAIL."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "PLACE-001")
+
+    # Case A: Explicit multi-panel metadata
+    decls_multi_panel = {
+        "commodity_name": {
+            "field_name": "commodity_name", "field_value": "Atta", "panel": "FRONT"
+        },
+        "mrp": {
+            "field_name": "mrp", "field_value": "50", "panel": "BACK"
+        },
+    }
+    res_panel = rule_engine._check_placement(rule, decls_multi_panel, list(decls_multi_panel.values()))
+    assert res_panel.status == RuleEvaluationStatus.FAILED
+    assert res_panel.violation is not None
+    assert res_panel.violation.rule_id == "PLACE-001"
+
+    # Case B: Disjoint coordinates across image (e.g. front left panel vs far back right panel)
+    decls_disjoint = {
+        "commodity_name": {
+            "field_name": "commodity_name", "field_value": "Atta", "bounding_box": [50, 50, 200, 100]
+        },
+        "mrp": {
+            "field_name": "mrp", "field_value": "50", "bounding_box": [900, 50, 1050, 100]
+        },
+    }
+    res_disjoint = rule_engine._check_placement(rule, decls_disjoint, list(decls_disjoint.values()))
+    assert res_disjoint.status == RuleEvaluationStatus.FAILED
+    assert res_disjoint.violation.rule_id == "PLACE-001"
+
+
+def test_place_001_placement_no_boxes_not_applicable(rule_engine):
+    """Verifies PLACE-001 returns NOT_APPLICABLE when no coordinates exist."""
+    rule = next(r for r in rule_engine.get_all_rules() if r.rule_id == "PLACE-001")
+    decls_no_boxes = {
+        "commodity_name": {"field_name": "commodity_name", "field_value": "Atta"},
+        "mrp": {"field_name": "mrp", "field_value": "50"},
+    }
+    res = rule_engine._check_placement(rule, decls_no_boxes, list(decls_no_boxes.values()))
+    assert res.status == RuleEvaluationStatus.NOT_APPLICABLE
+
+
+def test_wholesale_package_evaluation_compliant(rule_engine):
+    """
+    Verifies wholesale packages require only 3 declarations under Rule 24:
+    name/address of mfr, net quantity, and commodity name.
+    Lacking MRP, manufacturing date, and CC info evaluates to COMPLIANT.
+    """
+    wholesale_declarations = [
+        {
+            "declaration_id": "ws-1",
+            "field_name": "commodity_name",
+            "field_value": "Industrial Flour 50kg Sack",
+            "confidence": 0.98,
+        },
+        {
+            "declaration_id": "ws-2",
+            "field_name": "net_quantity",
+            "field_value": "50 kg",
+            "confidence": 0.96,
+        },
+        {
+            "declaration_id": "ws-3",
+            "field_name": "manufacturer_name",
+            "field_value": "Agro Millers Pvt Ltd",
+            "confidence": 0.97,
+        },
+        {
+            "declaration_id": "ws-4",
+            "field_name": "manufacturer_address",
+            "field_value": "Plot 10, Industrial Estate, Nagpur 440001",
+            "confidence": 0.95,
+        },
+    ]
+
+    result = rule_engine.evaluate(
+        declarations=wholesale_declarations,
+        package_type="wholesale",
+        overall_confidence=0.96,
+    )
+    assert result.status == ComplianceStatus.COMPLIANT
+    assert len(result.violations) == 0
+    assert len(result.warnings) == 0
+    assert result.evaluated_rules == 5  # NAME-001, NQ-001, NQ-002, MFR-001, MFR-002
+
+
+def test_wholesale_package_missing_commodity_name_fails(rule_engine):
+    """Verifies wholesale package lacking commodity name fails mandatory NAME-001 rule."""
+    wholesale_no_name = [
+        {
+            "declaration_id": "ws-2",
+            "field_name": "net_quantity",
+            "field_value": "50 kg",
+            "confidence": 0.96,
+        },
+        {
+            "declaration_id": "ws-3",
+            "field_name": "manufacturer_name",
+            "field_value": "Agro Millers Pvt Ltd",
+            "confidence": 0.97,
+        },
+        {
+            "declaration_id": "ws-4",
+            "field_name": "manufacturer_address",
+            "field_value": "Plot 10, Industrial Estate, Nagpur 440001",
+            "confidence": 0.95,
+        },
+    ]
+
+    result = rule_engine.evaluate(
+        declarations=wholesale_no_name,
+        package_type="wholesale",
+        overall_confidence=0.96,
+    )
+    assert result.status == ComplianceStatus.NON_COMPLIANT
+    assert any(v.rule_id == "NAME-001" for v in result.violations)
+
+
+def test_wholesale_package_exempt_from_mrp_vs_retail(rule_engine):
+    """
+    Demonstrates package_type discrimination:
+    - Same declarations lacking MRP are COMPLIANT for wholesale.
+    - But NON_COMPLIANT for retail (fails mandatory MRP-001).
+    """
+    declarations_lacking_mrp = [
+        {
+            "declaration_id": "d-1",
+            "field_name": "commodity_name",
+            "field_value": "Refined Sugar",
+            "confidence": 0.98,
+        },
+        {
+            "declaration_id": "d-2",
+            "field_name": "net_quantity",
+            "field_value": "25 kg",
+            "confidence": 0.96,
+        },
+        {
+            "declaration_id": "d-3",
+            "field_name": "manufacturer_name",
+            "field_value": "Sugar Mills Ltd",
+            "confidence": 0.97,
+        },
+        {
+            "declaration_id": "d-4",
+            "field_name": "manufacturer_address",
+            "field_value": "Sugar Town, Kolhapur 416001",
+            "confidence": 0.95,
+        },
+    ]
+
+    # Wholesale evaluation -> COMPLIANT (MRP not required)
+    ws_result = rule_engine.evaluate(
+        declarations=declarations_lacking_mrp,
+        package_type="wholesale",
+        overall_confidence=0.96,
+    )
+    assert ws_result.status == ComplianceStatus.COMPLIANT
+
+    # Retail evaluation -> NON_COMPLIANT (MRP is mandatory on retail)
+    retail_result = rule_engine.evaluate(
+        declarations=declarations_lacking_mrp,
+        package_type="retail",
+        overall_confidence=0.96,
+    )
+    # Notice that retail also has absent mandatory count (mrp, date, batch) >= 3 => NEEDS_REVIEW
+    # either way it is not COMPLIANT
+    assert retail_result.status in (ComplianceStatus.NON_COMPLIANT, ComplianceStatus.NEEDS_REVIEW)
+
+
+def test_reconciliation_higher_confidence_replaces_lower(rule_engine):
+    """Higher-confidence declaration replaces earlier lower-confidence declaration."""
+    decls = [
+        {
+            "field_name": "manufacturer_name",
+            "field_value": "Hershey India Pvt Ltd",
+            "raw_text": "Hershey India Pvt Ltd",
+            "confidence": 0.70,
+            "image_id": "img-1",
+            "panel": "FRONT",
+        },
+        {
+            "field_name": "manufacturer_name",
+            "field_value": "Hershey India Private Limited",
+            "raw_text": "Manufactured by Hershey India Private Limited",
+            "confidence": 0.95,
+            "image_id": "img-2",
+            "panel": "BACK",
+        },
+    ]
+    reconciled = rule_engine.reconcile_declarations(decls)
+    assert reconciled["manufacturer_name"]["confidence"] == 0.95
+    assert reconciled["manufacturer_name"]["field_value"] == "Hershey India Private Limited"
+    assert reconciled["manufacturer_name"]["image_id"] == "img-2"
+    assert reconciled["manufacturer_name"]["panel"] == "BACK"
+
+
+def test_reconciliation_lower_confidence_does_not_replace_higher(rule_engine):
+    """Lower-confidence declaration must NOT replace earlier higher-confidence declaration."""
+    decls = [
+        {
+            "field_name": "mrp",
+            "field_value": "65.00",
+            "raw_text": "MRP Rs 65.00",
+            "confidence": 0.98,
+            "image_id": "img-1",
+            "panel": "BACK",
+        },
+        {
+            "field_name": "mrp",
+            "field_value": "65",
+            "raw_text": "65",
+            "confidence": 0.50,
+            "image_id": "img-2",
+            "panel": "FRONT",
+        },
+    ]
+    reconciled = rule_engine.reconcile_declarations(decls)
+    assert reconciled["mrp"]["confidence"] == 0.98
+    assert reconciled["mrp"]["field_value"] == "65.00"
+    assert reconciled["mrp"]["image_id"] == "img-1"
+    assert reconciled["mrp"]["panel"] == "BACK"
+
+
+def test_reconciliation_null_empty_does_not_replace_present(rule_engine):
+    """Null, empty, or 0.0-confidence declaration must NEVER replace a present declaration."""
+    decls = [
+        {
+            "field_name": "country_of_origin",
+            "field_value": "India",
+            "raw_text": "Country of Origin: India",
+            "confidence": 0.92,
+            "image_id": "img-1",
+            "panel": "BACK",
+        },
+        {
+            "field_name": "country_of_origin",
+            "field_value": None,
+            "raw_text": None,
+            "confidence": 0.0,
+            "image_id": "img-2",
+            "panel": "FRONT",
+        },
+        {
+            "field_name": "country_of_origin",
+            "field_value": "",
+            "raw_text": "",
+            "confidence": 0.85,
+            "image_id": "img-3",
+            "panel": "SIDE",
+        },
+    ]
+    reconciled = rule_engine.reconcile_declarations(decls)
+    assert reconciled["country_of_origin"]["field_value"] == "India"
+    assert reconciled["country_of_origin"]["confidence"] == 0.92
+    assert reconciled["country_of_origin"]["image_id"] == "img-1"
+    assert reconciled["country_of_origin"]["panel"] == "BACK"
+
+
+def test_reconciliation_equal_confidence_tie_break_deterministic(rule_engine):
+    """
+    Equal-confidence tie break:
+    1. Prefer longer/more descriptive raw_text or field_value.
+    2. If lengths are equal: first-observed wins (deterministic).
+    """
+    # Case 1: Same confidence, one is more descriptive
+    decls_descriptive = [
+        {
+            "field_name": "manufacturer_address",
+            "field_value": "Mumbai 400001",
+            "raw_text": "Mumbai 400001",
+            "confidence": 0.90,
+            "image_id": "img-1",
+        },
+        {
+            "field_name": "manufacturer_address",
+            "field_value": "Plot 10, MIDC Industrial Area, Andheri East, Mumbai 400001",
+            "raw_text": "Plot 10, MIDC Industrial Area, Andheri East, Mumbai 400001",
+            "confidence": 0.90,
+            "image_id": "img-2",
+        },
+    ]
+    reconciled1 = rule_engine.reconcile_declarations(decls_descriptive)
+    assert reconciled1["manufacturer_address"]["image_id"] == "img-2"
+    assert "MIDC" in reconciled1["manufacturer_address"]["field_value"]
+
+    # Case 2: Same confidence, identical text length: first observed wins
+    decls_identical_length = [
+        {
+            "field_name": "net_quantity",
+            "field_value": "40 g",
+            "raw_text": "40 g",
+            "confidence": 0.95,
+            "image_id": "img-first",
+        },
+        {
+            "field_name": "net_quantity",
+            "field_value": "50 g",
+            "raw_text": "50 g",
+            "confidence": 0.95,
+            "image_id": "img-second",
+        },
+    ]
+    reconciled2 = rule_engine.reconcile_declarations(decls_identical_length)
+    assert reconciled2["net_quantity"]["image_id"] == "img-first"
+    assert reconciled2["net_quantity"]["field_value"] == "40 g"
+
+
+def test_reconciliation_multi_panel_3_images(rule_engine):
+    """Multi-panel inspection with 3 images correctly reconciles all fields."""
+    image1_front = [
+        {"field_name": "commodity_name", "field_value": "Milk Chocolate Bar", "confidence": 0.96, "image_id": "img-front", "panel": "FRONT"},
+        {"field_name": "net_quantity", "field_value": "40 g", "confidence": 0.94, "image_id": "img-front", "panel": "FRONT"},
+        {"field_name": "mrp", "field_value": None, "confidence": 0.0, "image_id": "img-front", "panel": "FRONT"},
+    ]
+    image2_back = [
+        {"field_name": "mrp", "field_value": "65.00", "confidence": 0.98, "image_id": "img-back", "panel": "BACK"},
+        {"field_name": "manufacturer_name", "field_value": "Hershey India Pvt Ltd", "confidence": 0.92, "image_id": "img-back", "panel": "BACK"},
+        {"field_name": "manufacturer_address", "field_value": "Plot 1, MIDC Mandideep 462046", "confidence": 0.90, "image_id": "img-back", "panel": "BACK"},
+        {"field_name": "manufacturing_date", "field_value": "2024-05", "confidence": 0.93, "image_id": "img-back", "panel": "BACK"},
+        {"field_name": "batch_number", "field_value": "B-4019", "confidence": 0.89, "image_id": "img-back", "panel": "BACK"},
+        {"field_name": "net_quantity", "field_value": "40g", "confidence": 0.85, "image_id": "img-back", "panel": "BACK"},
+    ]
+    image3_side = [
+        {"field_name": "consumer_care_info", "field_value": "care@hershey.com", "confidence": 0.91, "image_id": "img-side", "panel": "SIDE"},
+        {"field_name": "country_of_origin", "field_value": "India", "confidence": 0.95, "image_id": "img-side", "panel": "SIDE"},
+        {"field_name": "unit_sale_price", "field_value": "Rs 1.625 / g", "confidence": 0.88, "image_id": "img-side", "panel": "SIDE"},
+        {"field_name": "mrp", "field_value": "65", "confidence": 0.70, "image_id": "img-side", "panel": "SIDE"},
+    ]
+
+    all_decls = image1_front + image2_back + image3_side
+    reconciled = rule_engine.reconcile_declarations(all_decls)
+
+    # FRONT wins net_quantity (0.94 > 0.85)
+    assert reconciled["net_quantity"]["image_id"] == "img-front"
+    # BACK wins mrp (0.98 > 0.70 > 0.0)
+    assert reconciled["mrp"]["image_id"] == "img-back"
+    assert reconciled["mrp"]["field_value"] == "65.00"
+    # SIDE wins consumer_care_info & country_of_origin
+    assert reconciled["consumer_care_info"]["image_id"] == "img-side"
+    assert reconciled["country_of_origin"]["image_id"] == "img-side"
+
+
+def test_decoupled_confidence_metric_and_coverage(rule_engine):
+    """Mean confidence must only average extracted fields, and coverage must be tracked separately."""
+    decls = [
+        {"field_name": "mrp", "field_value": "65.00", "confidence": 0.95},
+        {"field_name": "net_quantity", "field_value": "40 g", "confidence": 0.90},
+        {"field_name": "unit_sale_price", "field_value": "Rs 1.625 / g", "confidence": 0.94},
+        # 8 mandatory fields absent
+        {"field_name": "commodity_name", "field_value": None, "confidence": 0.0},
+        {"field_name": "manufacturer_name", "field_value": None, "confidence": 0.0},
+        {"field_name": "manufacturer_address", "field_value": None, "confidence": 0.0},
+        {"field_name": "manufacturing_date", "field_value": None, "confidence": 0.0},
+        {"field_name": "batch_number", "field_value": None, "confidence": 0.0},
+        {"field_name": "consumer_care_info", "field_value": None, "confidence": 0.0},
+        {"field_name": "country_of_origin", "field_value": None, "confidence": 0.0},
+    ]
+
+    result = rule_engine.evaluate(declarations=decls, package_type="retail")
+
+    # Mean confidence should be ~0.93 ((0.95 + 0.90 + 0.94) / 3 = 0.93), NOT 0.25!
+    assert 0.92 <= result.confidence_score <= 0.94
+    assert result.fields_extracted == 2  # commodity_name, manufacturer_name etc. absent; mrp and net_quantity present
+    assert result.status == ComplianceStatus.NEEDS_REVIEW
+    # Verify reason mentions incomplete inspection, not low AI confidence
+    assert any("Incomplete inspection" in note for note in result.notes)
+    assert not any("Low extraction confidence" in note for note in result.notes)
+
+

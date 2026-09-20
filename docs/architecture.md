@@ -25,29 +25,27 @@
 │  INSPECTOR      │             │  ReportService                  │
 │  VIEWER         │             └────────┬────────────────────────┘
 └────────┬────────┘                      │
-         │                     ┌────────▼────────────────────────┐
-         │                     │       AI PIPELINE               │
-         │                     │  ┌─────────────────────────┐   │
-         │                     │  │ 1. Image Preprocessor   │   │
-         │                     │  │    (OpenCV)             │   │
-         │                     │  ├─────────────────────────┤   │
-         │                     │  │ 2. OCR Engine           │   │
-         │                     │  │    (PaddleOCR — Ph.2)   │   │
-         │                     │  ├─────────────────────────┤   │
-         │                     │  │ 3. Declaration Extractor│   │
-         │                     │  │    (Ph.3)               │   │
-         │                     │  ├─────────────────────────┤   │
-         │                     │  │ 4. Rule Engine          │   │
-         │                     │  │    (Deterministic)      │   │
-         │                     │  ├─────────────────────────┤   │
-         │                     │  │ 5. LLM/RAG Assistant    │   │
-         │                     │  │    (Legal explanations) │   │
-         │                     │  │    [Ph.7 — NOT decision │   │
-         │                     │  │     maker]              │   │
-         │                     │  └─────────────────────────┘   │
-         │                     │  ⚠ Phase 1: STUB pipeline      │
-         │                     └────────┬────────────────────────┘
-         │                              │
+          │                     ┌────────▼────────────────────────┐
+          │                     │       AI PIPELINE               │
+          │                     │  ┌─────────────────────────┐   │
+          │                     │  │ 1. Vision Engine        │   │
+          │                     │  │    (Gemini 2.5 Flash)   │   │
+          │                     │  ├─────────────────────────┤   │
+          │                     │  │ 2. Structured Extraction│   │
+          │                     │  │    & Bounding Boxes     │   │
+          │                     │  ├─────────────────────────┤   │
+          │                     │  │ 3. Value Normalizers    │   │
+          │                     │  │    (MRP, Units, Dates)  │   │
+          │                     │  ├─────────────────────────┤   │
+          │                     │  │ 4. Deterministic Rule   │   │
+          │                     │  │    Engine (rules.json)  │   │
+          │                     │  ├─────────────────────────┤   │
+          │                     │  │ 5. Offline/Stub Fallback│   │
+          │                     │  │    (StubPipeline)       │   │
+          │                     │  └─────────────────────────┘   │
+          │                     │  [Planned: Local PaddleOCR]     │
+          │                     └────────┬────────────────────────┘
+          │                              │
 ┌────────▼──────────────────────────────▼────────────────────────┐
 │                    DATA LAYER                                   │
 │  PostgreSQL 15       │  Redis 7                                │
@@ -61,42 +59,87 @@
 
 ## 2. AI Pipeline Design Principle
 
-> **The LLM is NOT the legal decision-maker.**
+> **The AI/LLM is NEVER the legal decision-maker.**
+>
+> Google Gemini Vision acts strictly as an extraction instrument to perceive text and bounding boxes from packaging images.
+> The deterministic rule engine (`rule-engine/engine.py`) evaluates the extracted data against statutory provisions to make all legal compliance determinations.
+> LLM/RAG (Phase 7) is reserved exclusively for natural language assistance and legal provision explanation.
 
 ```
-Image
+Package Image File
   │
-  ▼ Image Preprocessing (OpenCV)
-  │  - Noise reduction, contrast enhancement
-  │  - Perspective correction, deskewing
-  │  - ROI detection
+  ▼ Image Validation & Format Handling
+  │  - Supported MIME formats (JPEG, PNG, WebP, TIFF)
+  │  - Candidate path resolution & validation
   │
-  ▼ OCR Engine (PaddleOCR — Phase 2)
-  │  - Text detection + recognition
-  │  - Bounding box extraction
-  │  - Confidence scores per text region
+  ▼ Multimodal Extraction — Google Gemini Vision (google-genai SDK)
+  │  - Active Model: gemini-2.5-flash (configurable to gemini-3.5-flash-lite)
+  │  - Constrained JSON Schema: PackageLabelAnalysis
+  │  - Extracts 11+ legal fields: value, raw_text, confidence, bounding_box [x1, y1, x2, y2]
+  │  - Detects OCR text regions across package panels
+  │  - Missing declaration policy: value=null, confidence=0.0 (strictly no hallucination)
   │
-  ▼ Declaration Extractor (Phase 3)
-  │  - Named entity recognition for declarations
-  │  - Field mapping: MRP, net qty, manufacturer, etc.
-  │  - Structured JSON output
+  ▼ Domain-Specific Value Normalization (ai/pipeline/vision_pipeline.py)
+  │  - normalize_mrp: Currency symbol strip (₹, Rs., INR) & numeric float conversion
+  │  - normalize_quantity: Amount float & canonical unit mapping (gm/g -> g, ltr/l -> l)
+  │  - normalize_date: ISO 8601 (YYYY-MM-DD) normalization or ambiguous date flagging
   │
-  ▼ Deterministic Rule Engine (Phase 4)
-  │  - JSON-driven rules (Legal Metrology Rules 2011)
-  │  - COMPLIANT / NON_COMPLIANT / WARNING / NEEDS_REVIEW
-  │  - Every result has confidence score
-  │  - Below threshold → "Human verification recommended"
+  ▼ Deterministic Rule Engine (rule-engine/engine.py)
+  │  - Data-driven statutory evaluation against Legal Metrology (PC) Rules, 2011
+  │  - presence_check: Mandatory declaration presence per Rule 6(1)
+  │  - format_check: Syntax & regex pattern validation
+  │  - unit_check: Second/Third Schedule measurement units (UNIT_NORMALIZATION_MAP)
+  │  - conditional_check: Context-dependent rules (e.g. import origin Rule 6(1)(k))
+  │  - wholesale_scoping: Rule 24 exemption evaluation for wholesale packages
+  │  - font_size_check: PDP font size verification (FONT-001)
+  │  - single-panel protection: Missing >= 3 declarations downgrades to NEEDS_REVIEW
   │
-  ▼ Compliance Result
-  │  - Structured violations list
-  │  - Legal references
-  │  - Evidence bounding boxes
+  ▼ Statutory Compliance Result
+  │  - Status: COMPLIANT | NON_COMPLIANT | WARNING | NEEDS_REVIEW
+  │  - Structured violations with rule_id, observed_value, expected, legal_reference
+  │  - Bounding box coordinates for visual evidence overlay
   │
-  ▼ LLM/RAG (Phase 7 — assistance only)
-     - Natural language explanation of violations
-     - Legal provision retrieval (RAG from knowledge base)
-     - NOT used for compliance decisions
+  ▼ LLM / RAG (Phase 7 — Natural Language Assistance Only)
+     - Explains complex statutory violations in plain language for enforcement officers
+     - Retrieves relevant case law and gazette notifications from knowledge base
+     - Strictly excluded from compliance decision-making
 ```
+
+### External AI Dependency & Operational Modes
+
+- **External Network Dependency:**
+  The real extraction pipeline invokes Google's Gemini Vision API via HTTPS. When active (`AI_PIPELINE_MODE=vision`), package label image bytes are transmitted externally to Google's endpoints for multimodal processing. An active outbound internet connection and `GEMINI_API_KEY` configured in `.env` are required.
+- **Offline / Development Fallback (`AI_PIPELINE_MODE=stub`):**
+  If `GEMINI_API_KEY` is omitted or `AI_PIPELINE_MODE=stub`, the system routes to `StubPipeline`. To prevent incorrect enforcement actions, the stub marks results with `pipeline_status="DEV_STUB"` and sets overall compliance to `NEEDS_REVIEW`.
+- **API Failure Handling:**
+  If network connectivity is lost or Gemini API returns an unrecoverable error during active inspection, the backend returns `HTTP 502 Bad Gateway` and marks the inspection pipeline status as `FAILED`.
+- **Local/Offline Alternative (Planned):**
+  For high-security air-gapped deployments where external image transmission is prohibited, a local on-premise pipeline using PaddleOCR is planned.
+
+### Model Self-Reported Confidence Calibration & Safeguards
+
+Modern multimodal LLMs like Google Gemini Vision do not natively emit true Bayesian or frequentist probability distributions for extraction tasks. Instead, Gemini outputs self-reported confidence scores (or verbalized confidences) requested via prompt formatting. In practice, this exhibits distinct characteristics and operational risks that our architecture explicitly mitigates:
+
+1. **Overconfidence Tendency:**
+   Multimodal foundation models are prone to overconfidence on clear text segments, typically self-reporting $\ge 0.95$ (often $0.98$–$0.99$) even when slight OCR character misrecognitions or field misattributions occur. Conversely, when text is inverted, blurred, or occluded, the model may either fail to detect the field altogether (returning `value: null, confidence: 0.0`) or output degraded text.
+
+2. **Decoupling Confidence from Completeness (Coverage):**
+   A critical defect in naive extraction pipelines is conflating *extraction confidence* (how sure the model is about the text it read) with *inspection coverage* (how many mandatory statutory fields were detected).
+   - If an inspector photographs only one panel containing 3 declarations (MRP, net quantity, unit sale price), the vision model extracts all 3 with ~0.93 confidence.
+   - If missing fields (confidence 0.0) are averaged into the mean, the system spuriously reports 0.25 overall confidence, obscuring the fact that the 3 extracted fields were parsed with high fidelity.
+   - **Architectural Safeguard:** Mean extraction confidence is computed **exclusively over extracted fields** (`confidence > 0.0` and non-empty value). Inspection completeness is measured independently as `fields_extracted` / `total_mandatory_fields` (coverage ratio).
+
+3. **Two Distinct `NEEDS_REVIEW` Failure Modes:**
+   The deterministic rule engine distinguishes two completely different operational problems for enforcement officers:
+   - **Incomplete Inspection (Missing Panels):** Triggered when $\ge 3$ mandatory fields are absent (`absent_mandatory_count >= 3`). The package is not declared non-compliant; instead, the officer is instructed to capture photos of the remaining package panels (e.g. front PDP, side panel).
+   - **Low Extraction Confidence (Poor Image Quality):** Triggered when mean confidence over extracted fields falls below `AI_CONFIDENCE_THRESHOLD` (default 0.75). The officer is alerted that the photo is blurry, low-resolution, or glare-affected, requiring a clearer rescan.
+
+4. **Multi-Image Reconciliation & Provenance:**
+   When an inspection contains multiple images (e.g. front, back, sides), declarations are reconciled deterministically per field:
+   - The highest-confidence declaration wins.
+   - Absent (null / 0.0 confidence) declarations from subsequent panels never overwrite an already-extracted declaration.
+   - Equal-confidence ties are broken deterministically by favoring more descriptive text (longer character length) and first-observed occurrence.
+   - Full provenance is preserved, tagging each winning declaration with its source `image_id` and package `panel`.
 
 ---
 
