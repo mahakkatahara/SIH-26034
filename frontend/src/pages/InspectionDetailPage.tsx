@@ -17,32 +17,51 @@ export default function InspectionDetailPage() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const API_URL = import.meta.env.VITE_API_URL || '';
 
-  const load = async () => {
+  const load = async (showSpinner = false) => {
     if (!id) return;
-    setLoading(true);
+    if (showSpinner) setLoading(true);
     try {
       const data = await inspectionsApi.get(id);
       setInspection(data);
-      if (data.images.length > 0) setSelectedImage(data.images[0].image_path);
-    } catch {}
-    finally { setLoading(false); }
+      if (data.images.length > 0 && !selectedImage) {
+        setSelectedImage(data.images[0].image_path);
+      }
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || err?.message || 'Failed to load inspection details.');
+    } finally {
+      if (showSpinner) setLoading(false);
+    }
   };
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(true); }, [id]);
 
   const handleAnalyze = async () => {
     if (!id) return;
+    if (!inspection?.images || inspection.images.length === 0) {
+      setError('Please upload at least one package image before running analysis.');
+      return;
+    }
     setAnalyzing(true);
+    setError(null);
     try {
       const result = await inspectionsApi.analyze(id);
       setAnalysisResult(result);
-      await load(); // Refresh inspection status
+      await load(false); // Refresh inspection status & violations
     } catch (err: any) {
-      console.error(err);
-    } finally { setAnalyzing(false); }
+      const message =
+        err?.response?.data?.detail ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Analysis failed. Please check the backend connection and try again.';
+      setError(message);
+      console.error('Analysis error:', err);
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   const handleGenerateReport = async (type: 'PDF' | 'DOCX') => {
@@ -166,14 +185,55 @@ export default function InspectionDetailPage() {
                 <StatusBadge status={inspection.ai_pipeline_status} />
               </div>
               <button
-                id="run-analysis-btn"
+                id="analyze-btn"
+                data-testid="analyze-button"
                 onClick={handleAnalyze}
-                disabled={analyzing || inspection.images.length === 0}
-                className="btn-primary btn-sm"
+                disabled={analyzing}
+                className="btn-primary btn-sm flex items-center gap-1.5"
               >
-                {analyzing ? <><Loader2 size={13} className="animate-spin" /> Analyzing...</> : <><RefreshCw size={13} /> Run Analysis</>}
+                {analyzing ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    <span>Analyzing...</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={13} />
+                    <span>Analyze</span>
+                  </>
+                )}
               </button>
             </div>
+
+            {/* Error message */}
+            {error && (
+              <div
+                role="alert"
+                className="mb-4 flex items-start gap-2 p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 text-sm"
+              >
+                <AlertTriangle size={16} className="flex-shrink-0 mt-0.5 text-red-400" />
+                <div className="flex-1">
+                  <p>{error}</p>
+                </div>
+                <button
+                  onClick={() => setError(null)}
+                  className="text-xs text-red-400 hover:text-red-200 ml-2"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {/* Loading state banner */}
+            {analyzing && (
+              <div className="py-6 text-center text-indigo-300 text-sm bg-indigo-950/20 border border-indigo-500/20 rounded-lg mb-4">
+                <Loader2 size={24} className="animate-spin mx-auto mb-2 text-indigo-400" />
+                <p className="font-medium">AI analysis in progress...</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Extracting mandatory declarations and verifying Legal Metrology compliance.
+                </p>
+              </div>
+            )}
 
             {/* Stub notice */}
             {(inspection.ai_pipeline_status === 'DEV_STUB' || analysisResult?.pipeline_status === 'DEV_STUB') && (
@@ -186,33 +246,41 @@ export default function InspectionDetailPage() {
               </div>
             )}
 
-            {inspection.ai_pipeline_status === 'NOT_STARTED' && !analysisResult && (
+            {inspection.ai_pipeline_status === 'NOT_STARTED' && !analysisResult && !analyzing && (
               <div className="py-8 text-center text-slate-500 text-sm">
                 <Brain size={32} className="mx-auto mb-2 opacity-30" />
-                Analysis not yet started. Upload images and click "Run Analysis".
+                Analysis not yet started. Upload images and click "Analyze".
               </div>
             )}
 
-            {/* Declarations (empty in Phase 1) */}
-            {analysisResult && analysisResult.declarations.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-slate-300">Extracted Declarations</h3>
-                {analysisResult.declarations.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-800/40">
-                    <div>
-                      <span className="text-xs font-mono text-indigo-300">{d.field_name}</span>
-                      <span className="mx-2 text-slate-600">·</span>
-                      <span className="text-sm text-white">{d.field_value}</span>
+            {/* Declarations */}
+            {(() => {
+              const decls = (analysisResult && analysisResult.declarations.length > 0)
+                ? analysisResult.declarations
+                : (inspection.declarations || []);
+              if (decls.length === 0) return null;
+              return (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-slate-300">
+                    Extracted Declarations ({decls.length})
+                  </h3>
+                  {decls.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-800/40">
+                      <div>
+                        <span className="text-xs font-mono text-indigo-300">{d.field_name}</span>
+                        <span className="mx-2 text-slate-600">·</span>
+                        <span className="text-sm text-white">{d.field_value || <em className="text-slate-500">Not declared</em>}</span>
+                      </div>
+                      {d.confidence_score != null && (
+                        <span className="text-xs text-slate-500">
+                          {(d.confidence_score * 100).toFixed(0)}% confidence
+                        </span>
+                      )}
                     </div>
-                    {d.confidence_score != null && (
-                      <span className="text-xs text-slate-500">
-                        {(d.confidence_score * 100).toFixed(0)}% confidence
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
 

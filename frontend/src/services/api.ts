@@ -145,7 +145,7 @@ export const inspectionsApi = {
   },
 
   analyze: (id: string) =>
-    api.post<AnalysisResult>(`/inspections/${id}/analyze`).then((r) => r.data),
+    api.post<AnalysisResult>(`/inspections/${id}/analyze`, {}).then((r) => r.data),
 };
 
 // ─── Products API ──────────────────────────────────────────────────────────────
