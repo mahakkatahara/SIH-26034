@@ -1099,5 +1099,50 @@ def test_model_silence_on_single_field_yields_needs_review_not_non_compliant(rul
     assert not any(v.rule_id == "MFR-001" for v in res.violations)
 
 
+def test_field_state_unreadable_yields_needs_review_never_violation(rule_engine):
+    """When a field is marked unreadable (e.g. text visible but unparseable), route to NEEDS_REVIEW, never VIOLATION."""
+    decls = [
+        {"field_name": "commodity_name", "field_value": None, "raw_text": "HEY'S", "confidence": 0.90, "state": "unreadable"},
+        {"field_name": "mrp", "field_value": "₹ 100.00", "raw_text": "MRP Rs 100.00", "confidence": 0.98, "state": "present"},
+        {"field_name": "net_quantity", "field_value": "1 kg", "confidence": 0.92, "state": "present"},
+        {"field_name": "manufacturer_name", "field_value": "ABC Ltd", "confidence": 0.90, "state": "present"},
+        {"field_name": "manufacturer_address", "field_value": "123 Industrial Area, Pune", "confidence": 0.90, "state": "present"},
+        {"field_name": "manufacturing_date", "field_value": "2024-05", "confidence": 0.95, "state": "present"},
+        {"field_name": "best_before_date", "field_value": "2025-05", "confidence": 0.90, "state": "present"},
+        {"field_name": "batch_number", "field_value": "B-1234", "confidence": 0.90, "state": "present"},
+        {"field_name": "consumer_care_info", "field_value": "care@test.com", "confidence": 0.90, "state": "present"},
+        {"field_name": "country_of_origin", "field_value": "India", "confidence": 0.95, "state": "present"},
+        {"field_name": "unit_sale_price", "field_value": "₹ 100.00 / kg", "confidence": 0.90, "state": "present"},
+    ]
+    res = rule_engine.evaluate(declarations=decls, package_type="retail")
+    assert res.status == ComplianceStatus.NEEDS_REVIEW
+    assert res.status != ComplianceStatus.NON_COMPLIANT
+    # Commodity name rule NAME-001 must not be in violations
+    assert not any(v.rule_id == "NAME-001" for v in res.violations)
+    # Finding for NAME-001 in rule_results must be NEEDS_REVIEW
+    com_result = next(r for r in res.rule_results if r.rule_id == "NAME-001")
+    assert com_result.status == RuleEvaluationStatus.NEEDS_REVIEW
+
+
+def test_field_state_absent_yields_violation(rule_engine):
+    """When a mandatory field is marked absent, route to VIOLATION."""
+    decls = [
+        {"field_name": "commodity_name", "field_value": "Wheat Flour", "confidence": 0.95, "state": "present"},
+        {"field_name": "mrp", "field_value": "₹ 100.00", "raw_text": "MRP Rs 100.00", "confidence": 0.98, "state": "present"},
+        {"field_name": "net_quantity", "field_value": "1 kg", "confidence": 0.92, "state": "present"},
+        {"field_name": "manufacturer_name", "field_value": None, "confidence": 0.0, "state": "absent"},
+        {"field_name": "manufacturer_address", "field_value": "123 Industrial Area, Pune", "confidence": 0.90, "state": "present"},
+        {"field_name": "manufacturing_date", "field_value": "2024-05", "confidence": 0.95, "state": "present"},
+        {"field_name": "best_before_date", "field_value": "2025-05", "confidence": 0.90, "state": "present"},
+        {"field_name": "batch_number", "field_value": "B-1234", "confidence": 0.90, "state": "present"},
+        {"field_name": "consumer_care_info", "field_value": "care@test.com", "confidence": 0.90, "state": "present"},
+        {"field_name": "country_of_origin", "field_value": "India", "confidence": 0.95, "state": "present"},
+        {"field_name": "unit_sale_price", "field_value": "₹ 100.00 / kg", "confidence": 0.90, "state": "present"},
+    ]
+    res = rule_engine.evaluate(declarations=decls, package_type="retail")
+    assert res.status == ComplianceStatus.NON_COMPLIANT
+    assert any(v.rule_id == "MFR-001" for v in res.violations)
+
+
 
 

@@ -246,6 +246,7 @@ class RuleEngine:
             image_id = decl.get("image_id")
             panel = decl.get("panel") or decl.get("panel_id") or decl.get("label")
             extraction_status = decl.get("extraction_status", "answered")
+            state = decl.get("state", "present")
         else:
             field_name = getattr(decl, "field_name", None)
             field_value = getattr(decl, "field_value", None)
@@ -261,6 +262,7 @@ class RuleEngine:
             image_id = getattr(decl, "image_id", None)
             panel = getattr(decl, "panel", None) or getattr(decl, "panel_id", None) or getattr(decl, "label", None)
             extraction_status = getattr(decl, "extraction_status", "answered")
+            state = getattr(decl, "state", "present")
 
         return {
             "field_name": field_name,
@@ -275,6 +277,7 @@ class RuleEngine:
             "unit": unit,
             "normalized": normalized,
             "extraction_status": str(extraction_status or "answered"),
+            "state": str(state or "present"),
         }
 
     @staticmethod
@@ -334,6 +337,20 @@ class RuleEngine:
             if cand_status == "not_answered" and curr_status == "answered":
                 continue
 
+            # Rule 1.6: State precedence: present > unreadable > absent
+            cand_state = candidate.get("state", "present")
+            curr_state = current.get("state", "present")
+            if cand_state == "present" and curr_state != "present":
+                reconciled[fn] = candidate
+                continue
+            if curr_state == "present" and cand_state != "present":
+                continue
+            if cand_state == "unreadable" and curr_state == "absent":
+                reconciled[fn] = candidate
+                continue
+            if curr_state == "unreadable" and cand_state == "absent":
+                continue
+
             # Rule 2: Candidate is absent or confidence <= 0.0: never overwrite present current
             if not cand_present or cand_conf <= 0.0:
                 if curr_present:
@@ -375,12 +392,15 @@ class RuleEngine:
         """
         presence_check: Field exists, value non-null, stripped length > 0.
         """
-        if decl and decl.get("extraction_status") == "not_answered":
+        if decl and (decl.get("extraction_status") == "not_answered" or decl.get("state") == "unreadable"):
+            reason = f"Declaration for mandatory field '{rule.field}' is unreadable on the label; requires manual inspection"
+            if decl.get("extraction_status") == "not_answered":
+                reason = f"Model did not answer for mandatory field '{rule.field}'"
             return RuleEvaluationResult(
                 rule_id=rule.rule_id,
                 field=rule.field,
                 status=RuleEvaluationStatus.NEEDS_REVIEW,
-                reason=f"Model did not answer for mandatory field '{rule.field}'",
+                reason=reason,
             )
 
         if self._is_present(decl):
@@ -991,13 +1011,17 @@ class RuleEngine:
         for rule in applicable_rules:
             v_type = rule.validation_logic.get("type", "presence_check")
             decl = decls_by_field.get(rule.field)
+            decl_state = decl.get("state", "present") if decl else "absent"
 
-            if decl and decl.get("extraction_status") == "not_answered":
+            if decl and (decl.get("extraction_status") == "not_answered" or decl_state == "unreadable"):
+                reason = f"Field '{rule.field}' is unreadable on the label; requires human review"
+                if decl.get("extraction_status") == "not_answered":
+                    reason = f"Model did not answer for field '{rule.field}'; requires human review"
                 eval_res = RuleEvaluationResult(
                     rule_id=rule.rule_id,
                     field=rule.field,
                     status=RuleEvaluationStatus.NEEDS_REVIEW,
-                    reason=f"Model did not answer for field '{rule.field}'; requires human review",
+                    reason=reason,
                 )
             elif v_type == "presence_check":
                 eval_res = self._check_presence(rule, decl)
@@ -1064,13 +1088,13 @@ class RuleEngine:
         elif any(r.mandatory and r.severity == ViolationSeverity.HIGH for r in applicable_rules if any(v.rule_id == r.rule_id for v in violations)):
             # Mandatory HIGH rule failure
             status = ComplianceStatus.NON_COMPLIANT
-        elif warnings:
-            # Only MEDIUM / LOW severity issues
-            status = ComplianceStatus.WARNING
         elif any(any(r.mandatory and r.rule_id in nr for r in applicable_rules) for nr in needs_review_reasons):
             # A mandatory rule requires review (e.g. low visibility / unreadable text)
             status = ComplianceStatus.NEEDS_REVIEW
             notes.extend(needs_review_reasons)
+        elif warnings:
+            # Only MEDIUM / LOW severity issues
+            status = ComplianceStatus.WARNING
         else:
             # All mandatory rules passed, no warnings, no mandatory reviews
             status = ComplianceStatus.COMPLIANT

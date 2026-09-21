@@ -329,6 +329,7 @@ async def analyze_inspection(
             )
             decl_record.panel = img.label
             decl_record.extraction_status = getattr(decl, "extraction_status", "answered")
+            decl_record.state = getattr(decl, "state", "present")
             db.add(decl_record)
             all_saved_declarations.append(decl_record)
 
@@ -381,6 +382,7 @@ async def analyze_inspection(
             "confidence": d.confidence_score,
             "bounding_box": d.bounding_box,
             "extraction_status": getattr(d, "extraction_status", "answered"),
+            "state": getattr(d, "state", "present"),
         }
         for d in all_saved_declarations
     ]

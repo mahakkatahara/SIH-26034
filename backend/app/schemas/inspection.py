@@ -52,6 +52,7 @@ class DeclarationResponse(BaseModel):
     confidence_score: Optional[float] = None
     bounding_box: Optional[Dict[str, Any]] = None
     extraction_method: Optional[str] = None
+    state: Optional[str] = "present"
     is_verified: bool
     created_at: datetime
 

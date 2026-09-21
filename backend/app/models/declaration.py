@@ -64,6 +64,16 @@ class Declaration(Base):
     def panel(self, value: str | None) -> None:
         self._panel = value
 
+    @property
+    def state(self) -> str:
+        if hasattr(self, "_state_val") and self._state_val is not None:
+            return self._state_val
+        return "present"
+
+    @state.setter
+    def state(self, value: str | None) -> None:
+        self._state_val = value or "present"
+
     def __repr__(self) -> str:
         return f"<Declaration id={self.id} field={self.field_name} value={self.field_value!r}>"
 

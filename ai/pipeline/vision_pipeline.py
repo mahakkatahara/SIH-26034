@@ -13,7 +13,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,10 @@ class FieldExtraction(BaseModel):
     bounding_box: List[int] = Field(
         default_factory=list,
         description="Bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000, or empty list."
+    )
+    state: Literal["present", "absent", "unreadable"] = Field(
+        default="present",
+        description="Presence state: 'present' if successfully read; 'unreadable' if text is visible but unparseable/occluded; 'absent' if not on label."
     )
 
     @field_validator("bounding_box", mode="before")
@@ -115,8 +119,13 @@ Rules:
    - country_of_origin
    - unit_sale_price
 2. For each declaration field:
-   - Provide value, raw_text, confidence (0.0 to 1.0), and bounding_box as [ymin, xmin, ymax, xmax] normalized to 0-1000.
-   - If a declaration is missing or not visible in the image, you MUST set value to null, raw_text to null, and confidence to 0.0. NEVER guess, assume, or hallucinate values.
+   - Provide value, raw_text, confidence (0.0 to 1.0), bounding_box as [ymin, xmin, ymax, xmax] normalized to 0-1000, and state.
+   - Set state:
+     * "present" when the declaration is clearly found and extracted.
+     * "unreadable" when text or label area is visible but cannot be parsed due to blur, glare, angle, fold, or truncation.
+     * "absent" only when you have thoroughly checked and the declaration is genuinely not on the label.
+   - If state is "absent", set value to null, raw_text to null, and confidence to 0.0.
+   - If state is "unreadable", set value to null (or partial snippet), provide the visible raw_text, and appropriate confidence.
 3. In ocr_regions, list every distinct text segment/line detected on the image, with its text, bounding_box [ymin, xmin, ymax, xmax] normalized to 0-1000, and confidence.
 4. Output must strictly conform to the JSON schema.
 """
@@ -524,10 +533,24 @@ class VisionPipeline(BasePipeline):
             elif isinstance(field_data, dict):
                 field_data = FieldExtraction(**field_data)
 
-            # Missing field rule: value null => value None, confidence 0.0
             val = field_data.value
             raw = field_data.raw_text
-            conf = float(field_data.confidence) if (val is not None and is_answered) else 0.0
+            state = getattr(field_data, "state", "present")
+
+            # Route state:
+            if state == "unreadable" or (raw and val is None):
+                state = "unreadable"
+            elif val is None and not raw:
+                state = "absent" if state != "unreadable" else "unreadable"
+            else:
+                state = "present"
+
+            # Confidence: preserve confidence if val is present or raw_text is unreadable; 0.0 if absent
+            if state == "absent" or not is_answered:
+                conf = 0.0
+            else:
+                conf = float(field_data.confidence or 0.0)
+
             bbox_coords = field_data.bounding_box
 
             bbox = parse_bounding_box(bbox_coords, conf, img_width, img_height)
@@ -556,6 +579,7 @@ class VisionPipeline(BasePipeline):
                 bounding_box=bbox,
                 extraction_method="gemini_vision",
                 extraction_status=extraction_status,
+                state=state,
             )
             declarations.append(declaration)
             confidences.append(conf)

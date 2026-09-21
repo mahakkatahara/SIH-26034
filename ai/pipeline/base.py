@@ -52,6 +52,7 @@ class ExtractedDeclaration:
     bounding_box: Optional[BoundingBox] = None
     extraction_method: str = "unknown"
     extraction_status: str = "answered"  # "answered" | "not_answered"
+    state: str = "present"  # "present" | "absent" | "unreadable"
 
 
 @dataclass
