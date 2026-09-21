@@ -8,11 +8,14 @@ declarations with bounding boxes, confidence scores, and OCR text regions.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -281,11 +284,19 @@ def parse_bounding_box(
 
         # Enforce all coordinates in [0, 1000]
         if not (0.0 <= ymin <= 1000.0 and 0.0 <= xmin <= 1000.0 and 0.0 <= ymax <= 1000.0 and 0.0 <= xmax <= 1000.0):
+            logger.warning(
+                "Bounding box rejected: coordinates out of [0, 1000] range: %s",
+                bbox_coords,
+            )
             return None
 
         # Enforce strict ordering: ymin < ymax and xmin < xmax
         # Rejects inverted boxes and degenerate boxes (area == 0 or coordinates equal)
         if not (ymin < ymax and xmin < xmax):
+            logger.warning(
+                "Bounding box rejected: invalid coordinate ordering or degenerate dimensions (ymin=%.2f, ymax=%.2f, xmin=%.2f, xmax=%.2f): %s",
+                ymin, ymax, xmin, xmax, bbox_coords,
+            )
             return None
 
         if img_width is not None and img_height is not None and img_width > 0 and img_height > 0:

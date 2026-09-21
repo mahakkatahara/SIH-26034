@@ -362,13 +362,30 @@ def test_parse_bounding_box_degenerate_rejected():
 
 
 def test_parse_bounding_box_out_of_range_rejected():
-    """Coordinates outside [0, 1000] must be rejected and return None."""
-    # Negative coordinates
-    assert parse_bounding_box([-10, 200, 500, 600], conf=0.9) is None
-    assert parse_bounding_box([100, -5, 500, 600], conf=0.9) is None
-    # Exceeding 1000
-    assert parse_bounding_box([100, 200, 1005, 600], conf=0.9) is None
-    assert parse_bounding_box([100, 200, 500, 1200], conf=0.9) is None
+    """Coordinates outside [0, 1000] must be rejected, return None, and log a warning."""
+    from unittest.mock import patch
+
+    with patch("ai.pipeline.vision_pipeline.logger.warning") as mock_warn:
+        # Negative coordinates
+        assert parse_bounding_box([-10, 200, 500, 600], conf=0.9) is None
+        assert mock_warn.called
+        assert "out of [0, 1000] range" in mock_warn.call_args[0][0]
+
+        mock_warn.reset_mock()
+        assert parse_bounding_box([100, -5, 500, 600], conf=0.9) is None
+        assert mock_warn.called
+        assert "out of [0, 1000] range" in mock_warn.call_args[0][0]
+
+        # Exceeding 1000
+        mock_warn.reset_mock()
+        assert parse_bounding_box([100, 200, 1005, 600], conf=0.9) is None
+        assert mock_warn.called
+        assert "out of [0, 1000] range" in mock_warn.call_args[0][0]
+
+        mock_warn.reset_mock()
+        assert parse_bounding_box([100, 200, 500, 1200], conf=0.9) is None
+        assert mock_warn.called
+        assert "out of [0, 1000] range" in mock_warn.call_args[0][0]
 
 
 def test_package_label_analysis_schema_requires_all_statutory_fields():
