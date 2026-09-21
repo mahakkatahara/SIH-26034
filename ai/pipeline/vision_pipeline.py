@@ -79,17 +79,17 @@ class OCRRegionExtraction(BaseModel):
 
 class PackageLabelAnalysis(BaseModel):
     """Constrained schema for Gemini vision structured response."""
-    commodity_name: FieldExtraction = Field(default_factory=FieldExtraction)
-    mrp: FieldExtraction = Field(default_factory=FieldExtraction)
-    net_quantity: FieldExtraction = Field(default_factory=FieldExtraction)
-    manufacturer_name: FieldExtraction = Field(default_factory=FieldExtraction)
-    manufacturer_address: FieldExtraction = Field(default_factory=FieldExtraction)
-    manufacturing_date: FieldExtraction = Field(default_factory=FieldExtraction)
-    best_before_date: FieldExtraction = Field(default_factory=FieldExtraction)
-    batch_number: FieldExtraction = Field(default_factory=FieldExtraction)
-    consumer_care_info: FieldExtraction = Field(default_factory=FieldExtraction)
-    country_of_origin: FieldExtraction = Field(default_factory=FieldExtraction)
-    unit_sale_price: FieldExtraction = Field(default_factory=FieldExtraction)
+    commodity_name: FieldExtraction
+    mrp: FieldExtraction
+    net_quantity: FieldExtraction
+    manufacturer_name: FieldExtraction
+    manufacturer_address: FieldExtraction
+    manufacturing_date: FieldExtraction
+    best_before_date: FieldExtraction
+    batch_number: FieldExtraction
+    consumer_care_info: FieldExtraction
+    country_of_origin: FieldExtraction
+    unit_sale_price: FieldExtraction
     ocr_regions: List[OCRRegionExtraction] = Field(default_factory=list)
 
 

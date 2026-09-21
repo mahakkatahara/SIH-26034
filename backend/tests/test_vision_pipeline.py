@@ -369,3 +369,43 @@ def test_parse_bounding_box_gemini_normalized_scaled_to_image():
     assert bbox.height == round(221 / 1000.0 * 720, 2) # 159.12
 
 
+def test_package_label_analysis_schema_requires_all_statutory_fields():
+    """All 11 declaration fields must be in the required array of PackageLabelAnalysis schema."""
+    from pydantic import ValidationError
+    from ai.pipeline.vision_pipeline import PackageLabelAnalysis
+
+    schema = PackageLabelAnalysis.model_json_schema()
+    required = schema.get("required", [])
+
+    expected_fields = [
+        "commodity_name",
+        "mrp",
+        "net_quantity",
+        "manufacturer_name",
+        "manufacturer_address",
+        "manufacturing_date",
+        "best_before_date",
+        "batch_number",
+        "consumer_care_info",
+        "country_of_origin",
+        "unit_sale_price",
+    ]
+
+    for f in expected_fields:
+        assert f in required, f"Field '{f}' must be required in PackageLabelAnalysis schema"
+
+    # Omitting any required field must raise ValidationError
+    with pytest.raises(ValidationError):
+        PackageLabelAnalysis.model_validate({"mrp": {"value": "10.0"}})
+
+    # Providing all fields with null/0.0 values must be valid
+    valid_null_payload = {
+        f: {"value": None, "raw_text": None, "confidence": 0.0, "bounding_box": []}
+        for f in expected_fields
+    }
+    model = PackageLabelAnalysis.model_validate(valid_null_payload)
+    assert model.mrp.value is None
+    assert model.mrp.confidence == 0.0
+
+
+
