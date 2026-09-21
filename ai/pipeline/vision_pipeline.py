@@ -333,6 +333,142 @@ def parse_bounding_box(
         return None
 
 
+# ─── Safety Net: OCR Region & Proximity Matching (Option B) ──────────────────
+
+FIELD_OCR_KEYWORDS: Dict[str, List[re.Pattern]] = {
+    "mrp": [
+        re.compile(r"\bmrp\b", re.IGNORECASE),
+        re.compile(r"₹\s*\d+", re.IGNORECASE),
+        re.compile(r"\brs\.?\s*\d+", re.IGNORECASE),
+        re.compile(r"max(?:imum)?\s*retail\s*price", re.IGNORECASE),
+        re.compile(r"incl\.?\s*(?:of\s*)?all\s*taxes", re.IGNORECASE),
+    ],
+    "net_quantity": [
+        re.compile(r"\bnet\s*(?:wt\.?|weight|qty\.?|quantity|content|contents|volume|mass)\b", re.IGNORECASE),
+        re.compile(r"\b\d+\s*(?:g|kg|gm|ml|l|ltr|litre|liter|pieces|units)\b", re.IGNORECASE),
+    ],
+    "manufacturing_date": [
+        re.compile(r"\b(?:mfd|mfg|pkd|packed|pkg)\b", re.IGNORECASE),
+        re.compile(r"date\s*of\s*(?:mfg|manufacture|packaging|packing)", re.IGNORECASE),
+        re.compile(r"manufactured\s*(?:on|in|date)", re.IGNORECASE),
+        re.compile(r"pkd\s*(?:date|on|/)?:?", re.IGNORECASE),
+    ],
+    "best_before_date": [
+        re.compile(r"best\s*before", re.IGNORECASE),
+        re.compile(r"use\s*by", re.IGNORECASE),
+        re.compile(r"exp(?:iry)?\.?\s*date", re.IGNORECASE),
+        re.compile(r"\bexp\.?\b", re.IGNORECASE),
+        re.compile(r"consume\s*before", re.IGNORECASE),
+    ],
+    "batch_number": [
+        re.compile(r"batch\s*(?:no\.?|number)?", re.IGNORECASE),
+        re.compile(r"lot\s*(?:no\.?|number)?", re.IGNORECASE),
+        re.compile(r"\bb\.?\s*no\.?\b", re.IGNORECASE),
+    ],
+    "consumer_care_info": [
+        re.compile(r"custom(?:er)?\s*care", re.IGNORECASE),
+        re.compile(r"consumer\s*care", re.IGNORECASE),
+        re.compile(r"toll\s*free", re.IGNORECASE),
+        re.compile(r"care@\S+", re.IGNORECASE),
+        re.compile(r"helpline", re.IGNORECASE),
+        re.compile(r"feedback", re.IGNORECASE),
+        re.compile(r"contact\s*us", re.IGNORECASE),
+    ],
+    "country_of_origin": [
+        re.compile(r"country\s*of\s*origin", re.IGNORECASE),
+        re.compile(r"made\s*in\b", re.IGNORECASE),
+        re.compile(r"product\s*of\b", re.IGNORECASE),
+        re.compile(r"origin\s*:\s*", re.IGNORECASE),
+    ],
+    "manufacturer_name": [
+        re.compile(r"mfd\.?\s*by", re.IGNORECASE),
+        re.compile(r"mfg\.?\s*by", re.IGNORECASE),
+        re.compile(r"manufactured\s*by", re.IGNORECASE),
+        re.compile(r"marketed\s*by", re.IGNORECASE),
+        re.compile(r"packed\s*by", re.IGNORECASE),
+        re.compile(r"imported\s*by", re.IGNORECASE),
+    ],
+    "manufacturer_address": [
+        re.compile(r"regd\.?\s*off", re.IGNORECASE),
+        re.compile(r"registered\s*office", re.IGNORECASE),
+        re.compile(r"factory\s*address", re.IGNORECASE),
+        re.compile(r"plot\s*no\.?", re.IGNORECASE),
+        re.compile(r"industrial\s*area", re.IGNORECASE),
+        re.compile(r"address\s*:\s*", re.IGNORECASE),
+    ],
+    "unit_sale_price": [
+        re.compile(r"\busp\b", re.IGNORECASE),
+        re.compile(r"unit\s*sale\s*price", re.IGNORECASE),
+        re.compile(r"₹\s*[\d.]+\s*\/\s*(?:g|kg|ml|l|piece|unit)", re.IGNORECASE),
+        re.compile(r"rs\.?\s*[\d.]+\s*\/\s*(?:g|kg|ml|l|piece|unit)", re.IGNORECASE),
+    ],
+    "commodity_name": [
+        re.compile(r"name\s*of\s*(?:the\s*)?commodity", re.IGNORECASE),
+        re.compile(r"commodity\s*:", re.IGNORECASE),
+        re.compile(r"generic\s*name", re.IGNORECASE),
+        re.compile(r"product\s*name", re.IGNORECASE),
+    ],
+}
+
+
+def check_bbox_proximity_or_overlap(
+    box1: Optional[List[float]],
+    box2: Optional[List[float]],
+    max_center_dist: float = 120.0,
+) -> bool:
+    """Returns True if box1 and box2 intersect or their centers are within proximity."""
+    if not box1 or not box2 or len(box1) != 4 or len(box2) != 4:
+        return False
+    try:
+        y1_min, x1_min, y1_max, x1_max = [float(v) for v in box1]
+        y2_min, x2_min, y2_max, x2_max = [float(v) for v in box2]
+
+        # Overlap / intersection
+        inter_ymin = max(y1_min, y2_min)
+        inter_xmin = max(x1_min, x2_min)
+        inter_ymax = min(y1_max, y2_max)
+        inter_xmax = min(x1_max, x2_max)
+        if inter_ymax > inter_ymin and inter_xmax > inter_xmin:
+            return True
+
+        # Center distance check (0-1000 coordinate space)
+        c_y1, c_x1 = (y1_min + y1_max) / 2.0, (x1_min + x1_max) / 2.0
+        c_y2, c_x2 = (y2_min + y2_max) / 2.0, (x2_min + x2_max) / 2.0
+        dist = ((c_y1 - c_y2) ** 2 + (c_x1 - c_x2) ** 2) ** 0.5
+        return dist <= max_center_dist
+    except Exception:
+        return False
+
+
+def find_matching_ocr_region(
+    field_name: str,
+    field_bbox: Optional[List[float]],
+    ocr_regions: List[Any],
+) -> Optional[Any]:
+    """
+    Finds an OCR region that matches a field either by statutory keywords
+    or by spatial overlap / proximity with the expected field bounding box.
+    """
+    patterns = FIELD_OCR_KEYWORDS.get(field_name, [])
+    for region in (ocr_regions or []):
+        text = getattr(region, "text", "") if not isinstance(region, dict) else region.get("text", "")
+        if not text:
+            continue
+
+        # 1. Keyword match
+        for pat in patterns:
+            if pat.search(text):
+                return region
+
+        # 2. Spatial proximity match (if field_bbox is present)
+        region_bbox = getattr(region, "bounding_box", None) if not isinstance(region, dict) else region.get("bounding_box")
+        if field_bbox and region_bbox:
+            if check_bbox_proximity_or_overlap(field_bbox, region_bbox):
+                return region
+
+    return None
+
+
 # ─── Vision Pipeline Implementation ──────────────────────────────────────────
 
 class VisionPipeline(BasePipeline):
@@ -552,6 +688,30 @@ class VisionPipeline(BasePipeline):
                 conf = float(field_data.confidence or 0.0)
 
             bbox_coords = field_data.bounding_box
+
+            # Safety Net (Option B):
+            # If value is null (or state is absent), but a matching OCR region exists
+            # near expected area or contains relevant keywords, override state to "unreadable" -> triggers NEEDS_REVIEW.
+            if val is None or state == "absent":
+                matching_ocr = find_matching_ocr_region(
+                    field_name=field_name,
+                    field_bbox=bbox_coords,
+                    ocr_regions=analysis_data.ocr_regions,
+                )
+                if matching_ocr:
+                    state = "unreadable"
+                    ocr_text = getattr(matching_ocr, "text", "") if not isinstance(matching_ocr, dict) else matching_ocr.get("text", "")
+                    ocr_conf = getattr(matching_ocr, "confidence", 0.75) if not isinstance(matching_ocr, dict) else matching_ocr.get("confidence", 0.75)
+                    ocr_bbox = getattr(matching_ocr, "bounding_box", None) if not isinstance(matching_ocr, dict) else matching_ocr.get("bounding_box")
+                    if not raw:
+                        raw = ocr_text
+                    conf = max(conf, float(ocr_conf or 0.75))
+                    if not bbox_coords and ocr_bbox:
+                        bbox_coords = ocr_bbox
+                    logger.info(
+                        "Safety net (Option B): field '%s' value is null but matched OCR region '%s'. Overriding state to 'unreadable'.",
+                        field_name, ocr_text,
+                    )
 
             bbox = parse_bounding_box(bbox_coords, conf, img_width, img_height)
 

@@ -169,6 +169,9 @@ def test_missing_mrp_yields_none_and_zero_confidence(dummy_image, valid_gemini_p
         "confidence": 0.0,
         "bounding_box": None,
     }
+    payload["ocr_regions"] = [
+        r for r in valid_gemini_payload["ocr_regions"] if "MRP" not in r.get("text", "")
+    ]
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -425,6 +428,73 @@ def test_package_label_analysis_schema_requires_all_statutory_fields():
     model = PackageLabelAnalysis.model_validate(valid_null_payload)
     assert model.mrp.value is None
     assert model.mrp.confidence == 0.0
+
+
+def test_option_b_safety_net_ocr_keyword_overrides_absent_to_unreadable(dummy_image, valid_gemini_payload):
+    """When a mandatory field value is null / absent but an OCR region has matching keywords, override state to 'unreadable'."""
+    payload = dict(valid_gemini_payload)
+    # Set mrp to absent with null value
+    payload["mrp"] = {
+        "value": None,
+        "raw_text": None,
+        "confidence": 0.0,
+        "bounding_box": [],
+        "state": "absent",
+    }
+    payload["ocr_regions"] = [
+        {
+            "text": "MRP Rs. 245.00 (incl. of all taxes)",
+            "bounding_box": [80, 30, 110, 230],
+            "confidence": 0.94,
+        }
+    ]
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(payload)
+    mock_client.models.generate_content.return_value = mock_response
+
+    pipeline = VisionPipeline(client=mock_client)
+    result = pipeline.analyze(dummy_image, "image-uuid-safety-net")
+
+    mrp_decl = next(d for d in result.declarations if d.field_name == "mrp")
+    assert mrp_decl.state == "unreadable"
+    assert mrp_decl.raw_text == "MRP Rs. 245.00 (incl. of all taxes)"
+    assert mrp_decl.confidence == 0.94
+
+
+def test_option_b_safety_net_ocr_proximity_overrides_absent_to_unreadable(dummy_image, valid_gemini_payload):
+    """When a mandatory field value is null but an OCR region overlaps or is proximate to its bounding box, override state to 'unreadable'."""
+    payload = dict(valid_gemini_payload)
+    # Set net_quantity to null value, but with bounding box
+    payload["net_quantity"] = {
+        "value": None,
+        "raw_text": None,
+        "confidence": 0.0,
+        "bounding_box": [120, 30, 150, 150],
+        "state": "absent",
+    }
+    # OCR region has arbitrary text with no statutory keywords, but overlaps the bounding box
+    payload["ocr_regions"] = [
+        {
+            "text": "unreadable smeared print",
+            "bounding_box": [122, 35, 148, 145],
+            "confidence": 0.88,
+        }
+    ]
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(payload)
+    mock_client.models.generate_content.return_value = mock_response
+
+    pipeline = VisionPipeline(client=mock_client)
+    result = pipeline.analyze(dummy_image, "image-uuid-proximity-net")
+
+    qty_decl = next(d for d in result.declarations if d.field_name == "net_quantity")
+    assert qty_decl.state == "unreadable"
+    assert qty_decl.confidence >= 0.88
+
 
 
 

@@ -150,6 +150,83 @@ class ComplianceResult:
     reconciled_declarations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
+
+FIELD_OCR_PATTERNS: Dict[str, List[re.Pattern]] = {
+    "mrp": [
+        re.compile(r"\bmrp\b", re.IGNORECASE),
+        re.compile(r"₹\s*\d+", re.IGNORECASE),
+        re.compile(r"\brs\.?\s*\d+", re.IGNORECASE),
+        re.compile(r"max(?:imum)?\s*retail\s*price", re.IGNORECASE),
+        re.compile(r"incl\.?\s*(?:of\s*)?all\s*taxes", re.IGNORECASE),
+    ],
+    "net_quantity": [
+        re.compile(r"\bnet\s*(?:wt\.?|weight|qty\.?|quantity|content|contents|volume|mass)\b", re.IGNORECASE),
+        re.compile(r"\b\d+\s*(?:g|kg|gm|ml|l|ltr|litre|liter|pieces|units)\b", re.IGNORECASE),
+    ],
+    "manufacturing_date": [
+        re.compile(r"\b(?:mfd|mfg|pkd|packed|pkg)\b", re.IGNORECASE),
+        re.compile(r"date\s*of\s*(?:mfg|manufacture|packaging|packing)", re.IGNORECASE),
+        re.compile(r"manufactured\s*(?:on|in|date)", re.IGNORECASE),
+        re.compile(r"pkd\s*(?:date|on|/)?:?", re.IGNORECASE),
+    ],
+    "best_before_date": [
+        re.compile(r"best\s*before", re.IGNORECASE),
+        re.compile(r"use\s*by", re.IGNORECASE),
+        re.compile(r"exp(?:iry)?\.?\s*date", re.IGNORECASE),
+        re.compile(r"\bexp\.?\b", re.IGNORECASE),
+        re.compile(r"consume\s*before", re.IGNORECASE),
+    ],
+    "batch_number": [
+        re.compile(r"batch\s*(?:no\.?|number)?", re.IGNORECASE),
+        re.compile(r"lot\s*(?:no\.?|number)?", re.IGNORECASE),
+        re.compile(r"\bb\.?\s*no\.?\b", re.IGNORECASE),
+    ],
+    "consumer_care_info": [
+        re.compile(r"custom(?:er)?\s*care", re.IGNORECASE),
+        re.compile(r"consumer\s*care", re.IGNORECASE),
+        re.compile(r"toll\s*free", re.IGNORECASE),
+        re.compile(r"care@\S+", re.IGNORECASE),
+        re.compile(r"helpline", re.IGNORECASE),
+        re.compile(r"feedback", re.IGNORECASE),
+        re.compile(r"contact\s*us", re.IGNORECASE),
+    ],
+    "country_of_origin": [
+        re.compile(r"country\s*of\s*origin", re.IGNORECASE),
+        re.compile(r"made\s*in\b", re.IGNORECASE),
+        re.compile(r"product\s*of\b", re.IGNORECASE),
+        re.compile(r"origin\s*:\s*", re.IGNORECASE),
+    ],
+    "manufacturer_name": [
+        re.compile(r"mfd\.?\s*by", re.IGNORECASE),
+        re.compile(r"mfg\.?\s*by", re.IGNORECASE),
+        re.compile(r"manufactured\s*by", re.IGNORECASE),
+        re.compile(r"marketed\s*by", re.IGNORECASE),
+        re.compile(r"packed\s*by", re.IGNORECASE),
+        re.compile(r"imported\s*by", re.IGNORECASE),
+    ],
+    "manufacturer_address": [
+        re.compile(r"regd\.?\s*off", re.IGNORECASE),
+        re.compile(r"registered\s*office", re.IGNORECASE),
+        re.compile(r"factory\s*address", re.IGNORECASE),
+        re.compile(r"plot\s*no\.?", re.IGNORECASE),
+        re.compile(r"industrial\s*area", re.IGNORECASE),
+        re.compile(r"address\s*:\s*", re.IGNORECASE),
+    ],
+    "unit_sale_price": [
+        re.compile(r"\busp\b", re.IGNORECASE),
+        re.compile(r"unit\s*sale\s*price", re.IGNORECASE),
+        re.compile(r"₹\s*[\d.]+\s*\/\s*(?:g|kg|ml|l|piece|unit)", re.IGNORECASE),
+        re.compile(r"rs\.?\s*[\d.]+\s*\/\s*(?:g|kg|ml|l|piece|unit)", re.IGNORECASE),
+    ],
+    "commodity_name": [
+        re.compile(r"name\s*of\s*(?:the\s*)?commodity", re.IGNORECASE),
+        re.compile(r"commodity\s*:", re.IGNORECASE),
+        re.compile(r"generic\s*name", re.IGNORECASE),
+        re.compile(r"product\s*name", re.IGNORECASE),
+    ],
+}
+
+
 class RuleEngine:
     """
     Deterministic rule-based compliance engine.
@@ -279,6 +356,58 @@ class RuleEngine:
             "extraction_status": str(extraction_status or "answered"),
             "state": str(state or "present"),
         }
+
+    @staticmethod
+    def _normalize_bbox(box: Any) -> Optional[List[float]]:
+        """Extracts [ymin, xmin, ymax, xmax] from bounding box in list or dict format."""
+        if not box:
+            return None
+        if isinstance(box, (list, tuple)) and len(box) == 4:
+            return [float(v) for v in box]
+        if isinstance(box, dict):
+            if "ymin" in box and "xmin" in box and "ymax" in box and "xmax" in box:
+                return [float(box["ymin"]), float(box["xmin"]), float(box["ymax"]), float(box["xmax"])]
+            if "y" in box and "x" in box and "height" in box and "width" in box:
+                y = float(box["y"])
+                x = float(box["x"])
+                return [y, x, y + float(box["height"]), x + float(box["width"])]
+        return None
+
+    @staticmethod
+    def _boxes_intersect_or_proximate(box1: List[float], box2: List[float], max_center_dist: float = 120.0) -> bool:
+        """Returns True if box1 and box2 intersect or their centers are within proximity."""
+        try:
+            y1_min, x1_min, y1_max, x1_max = box1
+            y2_min, x2_min, y2_max, x2_max = box2
+            if min(y1_max, y2_max) > max(y1_min, y2_min) and min(x1_max, x2_max) > max(x1_min, x2_min):
+                return True
+            c_y1, c_x1 = (y1_min + y1_max) / 2.0, (x1_min + x1_max) / 2.0
+            c_y2, c_x2 = (y2_min + y2_max) / 2.0, (x2_min + x2_max) / 2.0
+            dist = ((c_y1 - c_y2) ** 2 + (c_x1 - c_x2) ** 2) ** 0.5
+            return dist <= max_center_dist
+        except Exception:
+            return False
+
+    @staticmethod
+    def _find_matching_ocr(field_name: str, field_bbox: Any, ocr_regions: List[Any]) -> Optional[Dict[str, Any]]:
+        """Matches an OCR region to a statutory field by keywords or spatial proximity."""
+        patterns = FIELD_OCR_PATTERNS.get(field_name, [])
+        for r in (ocr_regions or []):
+            text = r.get("text", "") if isinstance(r, dict) else getattr(r, "text", "")
+            if not text:
+                continue
+            for pat in patterns:
+                if pat.search(text):
+                    conf = r.get("confidence", 0.75) if isinstance(r, dict) else getattr(r, "confidence", 0.75)
+                    return {"text": text, "confidence": conf}
+            r_bbox = r.get("bounding_box") if isinstance(r, dict) else getattr(r, "bounding_box", None)
+            if field_bbox and r_bbox:
+                b1 = RuleEngine._normalize_bbox(field_bbox)
+                b2 = RuleEngine._normalize_bbox(r_bbox)
+                if b1 and b2 and RuleEngine._boxes_intersect_or_proximate(b1, b2):
+                    conf = r.get("confidence", 0.75) if isinstance(r, dict) else getattr(r, "confidence", 0.75)
+                    return {"text": text, "confidence": conf}
+        return None
 
     @staticmethod
     def _is_present(decl: Optional[Dict[str, Any]]) -> bool:
@@ -878,6 +1007,7 @@ class RuleEngine:
         overall_confidence: Optional[float] = None,
         confidence_threshold: float = 0.75,
         package_type: str = "retail",
+        ocr_regions: Optional[List[Any]] = None,
     ) -> ComplianceResult:
         """
         Evaluate extracted declarations against applicable rules.
@@ -898,6 +1028,7 @@ class RuleEngine:
             overall_confidence: Overall extraction confidence score (0.0 to 1.0).
             confidence_threshold: Confidence gate for human review (default 0.75).
             package_type: Package type ('retail' | 'wholesale' | 'any'). Defaults to 'retail'.
+            ocr_regions: Optional list of OCR text regions detected on image(s).
 
         Returns:
             ComplianceResult with status, violations, warnings, and per-rule results.
@@ -909,6 +1040,35 @@ class RuleEngine:
         decls_by_field = self.reconcile_declarations(declarations)
 
         applicable_rules = self.get_rules_for_category(product_category, package_type=pkg_type)
+
+        # 1.5 Option B Safety Net:
+        # If ocr_regions are provided, verify whether any absent or missing mandatory field
+        # matches an OCR region by statutory keywords or spatial proximity.
+        # If so, override state to "unreadable" -> triggers NEEDS_REVIEW instead of VIOLATION.
+        if ocr_regions:
+            for rule in applicable_rules:
+                fn = rule.field
+                decl = decls_by_field.get(fn)
+                if decl is None or decl.get("state") == "absent" or not self._is_present(decl):
+                    decl_bbox = decl.get("bounding_box") if decl else None
+                    matching_ocr = self._find_matching_ocr(fn, decl_bbox, ocr_regions)
+                    if matching_ocr:
+                        ocr_text = matching_ocr["text"]
+                        ocr_conf = float(matching_ocr.get("confidence") or 0.75)
+                        if decl is None:
+                            decl = self._normalize_declaration({
+                                "field_name": fn,
+                                "field_value": None,
+                                "raw_text": ocr_text,
+                                "confidence": ocr_conf,
+                                "state": "unreadable",
+                            })
+                            decls_by_field[fn] = decl
+                        else:
+                            decl["state"] = "unreadable"
+                            if not decl.get("raw_text"):
+                                decl["raw_text"] = ocr_text
+                            decl["confidence"] = max(float(decl.get("confidence") or 0.0), ocr_conf)
 
         # 2. Identify absent mandatory fields
         # Look at all mandatory rules with type 'presence_check'

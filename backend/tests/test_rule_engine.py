@@ -1144,5 +1144,34 @@ def test_field_state_absent_yields_violation(rule_engine):
     assert any(v.rule_id == "MFR-001" for v in res.violations)
 
 
+def test_option_b_safety_net_ocr_regions_override_absent_to_needs_review(rule_engine):
+    """When a mandatory field is absent but matching OCR text is found, Option B safety net overrides to NEEDS_REVIEW."""
+    # mrp is absent, but an OCR text region containing "MRP" is present
+    decls = [
+        {"field_name": "commodity_name", "field_value": "Wheat Flour", "confidence": 0.95, "state": "present"},
+        {"field_name": "mrp", "field_value": None, "confidence": 0.0, "state": "absent"},
+        {"field_name": "net_quantity", "field_value": "1 kg", "confidence": 0.92, "state": "present"},
+        {"field_name": "manufacturer_name", "field_value": "ABC Ltd", "confidence": 0.90, "state": "present"},
+        {"field_name": "manufacturer_address", "field_value": "123 Industrial Area, Pune", "confidence": 0.90, "state": "present"},
+        {"field_name": "manufacturing_date", "field_value": "2024-05", "confidence": 0.95, "state": "present"},
+        {"field_name": "best_before_date", "field_value": "2025-05", "confidence": 0.90, "state": "present"},
+        {"field_name": "batch_number", "field_value": "B-1234", "confidence": 0.90, "state": "present"},
+        {"field_name": "consumer_care_info", "field_value": "care@test.com", "confidence": 0.90, "state": "present"},
+        {"field_name": "country_of_origin", "field_value": "India", "confidence": 0.95, "state": "present"},
+        {"field_name": "unit_sale_price", "field_value": "₹ 100.00 / kg", "confidence": 0.90, "state": "present"},
+    ]
+    ocr_regions = [
+        {"text": "MRP Rs 150.00 (incl. of all taxes)", "confidence": 0.92, "bounding_box": [100, 200, 150, 400]}
+    ]
+    res = rule_engine.evaluate(declarations=decls, package_type="retail", ocr_regions=ocr_regions)
+    # The absent MRP must NOT produce a VIOLATION / NON_COMPLIANT status
+    assert res.status == ComplianceStatus.NEEDS_REVIEW
+    assert res.status != ComplianceStatus.NON_COMPLIANT
+    assert not any(v.rule_id == "MRP-001" for v in res.violations)
+    mrp_res = next(r for r in res.rule_results if r.rule_id == "MRP-001")
+    assert mrp_res.status == RuleEvaluationStatus.NEEDS_REVIEW
+
+
+
 
 

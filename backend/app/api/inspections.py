@@ -416,6 +416,15 @@ async def analyze_inspection(
     requires_usp = (product_pkg_type == "retail")
     is_imported = getattr(inspection.product, "is_imported", None) if inspection.product else None
 
+    ocr_region_dicts = [
+        {
+            "text": r.text,
+            "bounding_box": r.bounding_box,
+            "confidence": r.confidence_score,
+        }
+        for r in all_saved_ocr_regions
+    ]
+
     compliance_result = rule_engine.evaluate(
         declarations=decl_dicts,
         product_category=product_category,
@@ -428,6 +437,7 @@ async def analyze_inspection(
         overall_confidence=mean_confidence,
         confidence_threshold=settings.AI_CONFIDENCE_THRESHOLD,
         package_type=product_pkg_type or "retail",
+        ocr_regions=ocr_region_dicts,
     )
 
     # Fetch DB rules for mapping rule_id string (e.g. MRP-001) to rule UUID
