@@ -83,7 +83,7 @@ services:
       timeout: 10s
       retries: 3
     entrypoint: ["/bin/sh", "-c", "sed -i 's/\\r$$//' /app/entrypoint.sh 2>/dev/null || true; exec /bin/sh /app/entrypoint.sh \"$$@\"", "--"]
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
   # ─── Frontend (React + Vite) ───────────────────────────────────────────────
   frontend:
