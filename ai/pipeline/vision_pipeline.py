@@ -53,7 +53,7 @@ class FieldExtraction(BaseModel):
     )
     bounding_box: List[int] = Field(
         default_factory=list,
-        description="Bounding box [x1, y1, x2, y2] in pixel coordinates of source image, or empty list."
+        description="Bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000, or empty list."
     )
 
     @field_validator("bounding_box", mode="before")
@@ -66,7 +66,7 @@ class OCRRegionExtraction(BaseModel):
     text: str = Field(description="Detected text snippet.")
     bounding_box: List[int] = Field(
         default_factory=list,
-        description="Bounding box [x1, y1, x2, y2] in pixel coordinates, or empty list."
+        description="Bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000, or empty list."
     )
     confidence: float = Field(
         default=0.0,
@@ -112,9 +112,9 @@ Rules:
    - country_of_origin
    - unit_sale_price
 2. For each declaration field:
-   - Provide value, raw_text, confidence (0.0 to 1.0), and bounding_box as [x1, y1, x2, y2] in integer pixel coordinates of the source image.
+   - Provide value, raw_text, confidence (0.0 to 1.0), and bounding_box as [ymin, xmin, ymax, xmax] normalized to 0-1000.
    - If a declaration is missing or not visible in the image, you MUST set value to null, raw_text to null, and confidence to 0.0. NEVER guess, assume, or hallucinate values.
-3. In ocr_regions, list every distinct text segment/line detected on the image, with its text, bounding_box [x1, y1, x2, y2], and confidence.
+3. In ocr_regions, list every distinct text segment/line detected on the image, with its text, bounding_box [ymin, xmin, ymax, xmax] normalized to 0-1000, and confidence.
 4. Output must strictly conform to the JSON schema.
 """
 
@@ -263,39 +263,42 @@ def parse_bounding_box(
 ) -> Optional[BoundingBox]:
     """
     Parses and validates bounding box coordinates from Gemini Vision output.
-    Gemini standard format is [ymin, xmin, ymax, xmax] normalized to 0-1000.
+    Single coordinate convention: [ymin, xmin, ymax, xmax] normalized to 0-1000.
+
+    Enforces:
+      - All coordinates must be in [0, 1000]
+      - Strict ordering: ymin < ymax and xmin < xmax
+      - Drops degenerate boxes (area == 0 or coordinates equal) and returns None.
+      - Drops inverted boxes (ymin >= ymax or xmin >= xmax) and returns None.
+      - Drops out-of-range boxes (< 0 or > 1000) and returns None.
+
     Scales to source pixel dimensions if img_width and img_height are provided.
-    Rejects degenerate bounding boxes (width <= 0 or height <= 0).
     """
     if not bbox_coords or len(bbox_coords) != 4:
         return None
     try:
-        c1, c2, c3, c4 = [float(v) for v in bbox_coords]
+        ymin, xmin, ymax, xmax = [float(v) for v in bbox_coords]
 
-        # Check if coordinates are normalized 0-1000 or absolute pixels
-        is_normalized_1000 = all(0.0 <= v <= 1000.0 for v in (c1, c2, c3, c4)) and (
-            img_width is not None and img_height is not None and (max(c1, c2, c3, c4) <= 1000.0)
-        )
+        # Enforce all coordinates in [0, 1000]
+        if not (0.0 <= ymin <= 1000.0 and 0.0 <= xmin <= 1000.0 and 0.0 <= ymax <= 1000.0 and 0.0 <= xmax <= 1000.0):
+            return None
 
-        if is_normalized_1000 and img_width and img_height:
-            # Gemini native format: [ymin, xmin, ymax, xmax] normalized to 1000
-            ymin, ymax = min(c1, c3), max(c1, c3)
-            xmin, xmax = min(c2, c4), max(c2, c4)
+        # Enforce strict ordering: ymin < ymax and xmin < xmax
+        # Rejects inverted boxes and degenerate boxes (area == 0 or coordinates equal)
+        if not (ymin < ymax and xmin < xmax):
+            return None
+
+        if img_width is not None and img_height is not None and img_width > 0 and img_height > 0:
             x = (xmin / 1000.0) * img_width
             y = (ymin / 1000.0) * img_height
             width = ((xmax - xmin) / 1000.0) * img_width
             height = ((ymax - ymin) / 1000.0) * img_height
         else:
-            # Absolute pixel coordinates: check [ymin, xmin, ymax, xmax] vs [x1, y1, x2, y2]
-            # Standard order: x from horizontal bounds, y from vertical bounds
-            x1, x2 = min(c1, c3), max(c1, c3)
-            y1, y2 = min(c2, c4), max(c2, c4)
-            width = x2 - x1
-            height = y2 - y1
-            x = x1
-            y = y1
+            x = xmin
+            y = ymin
+            width = xmax - xmin
+            height = ymax - ymin
 
-        # Strict degenerate validation: reject any non-positive dimension
         if width <= 0.0 or height <= 0.0:
             return None
 

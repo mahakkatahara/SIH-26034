@@ -36,77 +36,77 @@ def valid_gemini_payload():
             "value": "Whole Wheat Atta",
             "raw_text": "Whole Wheat Atta",
             "confidence": 0.95,
-            "bounding_box": [10, 20, 210, 60]
+            "bounding_box": [20, 10, 60, 210]
         },
         "mrp": {
             "value": "₹ 245.00",
             "raw_text": "MRP Rs. 245.00 (incl. of all taxes)",
             "confidence": 0.98,
-            "bounding_box": [30, 80, 230, 110]
+            "bounding_box": [80, 30, 110, 230]
         },
         "net_quantity": {
             "value": "5 kg",
             "raw_text": "Net Quantity: 5 kg",
             "confidence": 0.92,
-            "bounding_box": [30, 120, 150, 150]
+            "bounding_box": [120, 30, 150, 150]
         },
         "manufacturer_name": {
             "value": "Pure Agro Foods Pvt Ltd",
             "raw_text": "Manufactured by Pure Agro Foods Pvt Ltd",
             "confidence": 0.90,
-            "bounding_box": [10, 160, 310, 190]
+            "bounding_box": [160, 10, 190, 310]
         },
         "manufacturer_address": {
             "value": "Plot 45, MIDC, Pune 411019, Maharashtra",
             "raw_text": "Plot 45, MIDC, Pune 411019, Maharashtra",
             "confidence": 0.88,
-            "bounding_box": [10, 200, 450, 230]
+            "bounding_box": [200, 10, 230, 450]
         },
         "manufacturing_date": {
             "value": "15/05/2024",
             "raw_text": "Mfg Date: 15/05/2024",
             "confidence": 0.94,
-            "bounding_box": [50, 240, 200, 270]
+            "bounding_box": [240, 50, 270, 200]
         },
         "best_before_date": {
             "value": "04/05/2025",
             "raw_text": "Best Before: 04/05/2025",
             "confidence": 0.86,
-            "bounding_box": [50, 280, 220, 310]
+            "bounding_box": [280, 50, 310, 220]
         },
         "batch_number": {
             "value": "BATCH-2024-X1",
             "raw_text": "Batch: BATCH-2024-X1",
             "confidence": 0.89,
-            "bounding_box": [50, 320, 200, 350]
+            "bounding_box": [320, 50, 350, 200]
         },
         "consumer_care_info": {
             "value": "customercare@pureagro.com, 1800-123-4567",
             "raw_text": "For feedback: customercare@pureagro.com / 1800-123-4567",
             "confidence": 0.87,
-            "bounding_box": [10, 360, 400, 390]
+            "bounding_box": [360, 10, 390, 400]
         },
         "country_of_origin": {
             "value": "India",
             "raw_text": "Country of Origin: India",
             "confidence": 0.96,
-            "bounding_box": [10, 400, 180, 430]
+            "bounding_box": [400, 10, 430, 180]
         },
         "unit_sale_price": {
             "value": "₹ 49.00 / kg",
             "raw_text": "Unit Sale Price: ₹ 49.00 / kg",
             "confidence": 0.84,
-            "bounding_box": [30, 440, 200, 470]
+            "bounding_box": [440, 30, 470, 200]
         },
         "ocr_regions": [
             {
                 "text": "Whole Wheat Atta",
-                "bounding_box": [10, 20, 210, 60],
+                "bounding_box": [20, 10, 60, 210],
                 "confidence": 0.95
             },
             {
                 "text": "MRP Rs. 245.00",
-                "bounding_box": [30, 80, 230, 110],
+                "bounding_box": [80, 30, 110, 230],
                 "confidence": 0.98
             }
         ]
@@ -313,49 +313,15 @@ async def test_analyze_inspection_vision_mode(client, inspector_token, valid_gem
 
 
 def test_parse_bounding_box_valid_coordinates():
-    """Valid [x1, y1, x2, y2] coordinates are unpacked into positive width and height."""
-    bbox = parse_bounding_box([10, 20, 210, 60], conf=0.95)
+    """Valid [ymin, xmin, ymax, xmax] normalized coordinates produce positive width and height."""
+    # [ymin=100, xmin=200, ymax=500, xmax=600]
+    bbox = parse_bounding_box([100, 200, 500, 600], conf=0.95)
     assert bbox is not None
-    assert bbox.x == 10.0
-    assert bbox.y == 20.0
-    assert bbox.width == 200.0
-    assert bbox.height == 40.0
+    assert bbox.x == 200.0
+    assert bbox.y == 100.0
+    assert bbox.width == 400.0
+    assert bbox.height == 400.0
     assert bbox.confidence == 0.95
-
-
-def test_parse_bounding_box_hershey_positive_coordinates():
-    """Exact Hershey run coordinates with positive dimensions produce valid BoundingBox."""
-    bbox = parse_bounding_box([561.0, 761.0, 783.0, 783.0], conf=0.92)
-    assert bbox is not None
-    assert bbox.width > 0.0
-    assert bbox.height > 0.0
-    assert bbox.confidence == 0.92
-
-
-def test_parse_bounding_box_degenerate_rejected():
-    """Degenerate bounding boxes (zero width or zero height) must be rejected and return None."""
-    # Zero height: y1 == y2 (e.g. [561.0, 761.0, 783.0, 761.0])
-    zero_height = parse_bounding_box([561.0, 761.0, 783.0, 761.0], conf=0.90)
-    assert zero_height is None
-
-    # Zero width: x1 == x2 (e.g. [561.0, 761.0, 561.0, 800.0])
-    zero_width = parse_bounding_box([561.0, 761.0, 561.0, 800.0], conf=0.90)
-    assert zero_width is None
-
-    # None or malformed coords
-    assert parse_bounding_box(None) is None
-    assert parse_bounding_box([]) is None
-    assert parse_bounding_box([10, 20]) is None
-
-
-def test_parse_bounding_box_inverted_coordinates_normalized():
-    """Inverted coordinates [x2, y2, x1, y1] are properly normalized to positive width/height."""
-    bbox = parse_bounding_box([210, 60, 10, 20], conf=0.88)
-    assert bbox is not None
-    assert bbox.x == 10.0
-    assert bbox.y == 20.0
-    assert bbox.width == 200.0
-    assert bbox.height == 40.0
 
 
 def test_parse_bounding_box_gemini_normalized_scaled_to_image():
@@ -367,6 +333,42 @@ def test_parse_bounding_box_gemini_normalized_scaled_to_image():
     assert bbox.y == round(562 / 1000.0 * 720, 2)   # 404.64
     assert bbox.width == round(24 / 1000.0 * 1280, 2) # 30.72
     assert bbox.height == round(221 / 1000.0 * 720, 2) # 159.12
+
+
+def test_parse_bounding_box_inverted_rejected():
+    """Inverted coordinates (ymin >= ymax or xmin >= xmax) must be rejected and return None."""
+    # Inverted y: ymin > ymax
+    assert parse_bounding_box([500, 200, 100, 600], conf=0.88) is None
+    # Inverted x: xmin > xmax
+    assert parse_bounding_box([100, 600, 500, 200], conf=0.88) is None
+    # Both inverted
+    assert parse_bounding_box([500, 600, 100, 200], conf=0.88) is None
+
+
+def test_parse_bounding_box_degenerate_rejected():
+    """Degenerate bounding boxes (zero width or zero height or empty) must return None."""
+    # Zero height: ymin == ymax
+    assert parse_bounding_box([561.0, 761.0, 561.0, 783.0], conf=0.90) is None
+    # Zero width: xmin == xmax
+    assert parse_bounding_box([561.0, 761.0, 783.0, 761.0], conf=0.90) is None
+    # Zero width and height (single point)
+    assert parse_bounding_box([500.0, 500.0, 500.0, 500.0], conf=0.90) is None
+    # None or malformed coords
+    assert parse_bounding_box(None) is None
+    assert parse_bounding_box([]) is None
+    assert parse_bounding_box([10, 20]) is None
+    assert parse_bounding_box([10, 20, 30]) is None
+    assert parse_bounding_box([10, 20, 30, 40, 50]) is None
+
+
+def test_parse_bounding_box_out_of_range_rejected():
+    """Coordinates outside [0, 1000] must be rejected and return None."""
+    # Negative coordinates
+    assert parse_bounding_box([-10, 200, 500, 600], conf=0.9) is None
+    assert parse_bounding_box([100, -5, 500, 600], conf=0.9) is None
+    # Exceeding 1000
+    assert parse_bounding_box([100, 200, 1005, 600], conf=0.9) is None
+    assert parse_bounding_box([100, 200, 500, 1200], conf=0.9) is None
 
 
 def test_package_label_analysis_schema_requires_all_statutory_fields():
