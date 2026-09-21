@@ -328,6 +328,7 @@ async def analyze_inspection(
                 extraction_method=decl.extraction_method or "gemini_vision",
             )
             decl_record.panel = img.label
+            decl_record.extraction_status = getattr(decl, "extraction_status", "answered")
             db.add(decl_record)
             all_saved_declarations.append(decl_record)
 
@@ -379,6 +380,7 @@ async def analyze_inspection(
             "raw_text": d.raw_text,
             "confidence": d.confidence_score,
             "bounding_box": d.bounding_box,
+            "extraction_status": getattr(d, "extraction_status", "answered"),
         }
         for d in all_saved_declarations
     ]

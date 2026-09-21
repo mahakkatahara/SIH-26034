@@ -191,3 +191,65 @@ async def test_reanalysis_is_idempotent(client, inspector_token):
     assert len(detail["violations"]) == len(data1["violations"])
     assert len(detail["ocr_regions"]) == len(data1["ocr_regions"])
 
+
+async def test_analyze_inspection_single_omitted_field_yields_needs_review(client, inspector_token):
+    """When the model omits a single mandatory field, status must be NEEDS_REVIEW, not NON_COMPLIANT."""
+    from unittest.mock import MagicMock, patch
+    import json
+    from ai.pipeline.vision_pipeline import VisionPipeline
+    from app.core.config import settings
+
+    # 1. Create inspection
+    create_resp = await client.post(
+        "/api/v1/inspections",
+        json={"remarks": "Model silence test inspection"},
+        headers={"Authorization": f"Bearer {inspector_token}"},
+    )
+    assert create_resp.status_code == 201
+    inspection_id = create_resp.json()["id"]
+
+    # 2. Upload image
+    img_content = b"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xFF\xDB"
+    upload_resp = await client.post(
+        f"/api/v1/inspections/{inspection_id}/images",
+        files=[("images", ("back_panel.jpg", img_content, "image/jpeg"))],
+        data={"label": "BACK"},
+        headers={"Authorization": f"Bearer {inspector_token}"},
+    )
+    assert upload_resp.status_code in (200, 201)
+
+    # 3. Setup mock pipeline with all compliant fields EXCEPT manufacturer_name which is omitted
+    payload_omitted_mfr = {
+        "commodity_name": {"value": "Dark Chocolate", "confidence": 0.95},
+        "mrp": {"value": "₹ 100.00", "raw_text": "MRP Rs 100.00", "confidence": 0.98},
+        "net_quantity": {"value": "50 g", "confidence": 0.90},
+        # manufacturer_name is completely OMITTED from payload
+        "manufacturer_address": {"value": "123 Industrial Area, Pune 411001", "confidence": 0.90},
+        "manufacturing_date": {"value": "2024-05", "confidence": 0.95},
+        "best_before_date": {"value": "2025-05", "confidence": 0.85},
+        "batch_number": {"value": "B-123", "confidence": 0.91},
+        "consumer_care_info": {"value": "care@test.com", "confidence": 0.89},
+        "country_of_origin": {"value": "India", "confidence": 0.96},
+        "unit_sale_price": {"value": "₹ 2.00 / g", "confidence": 0.85},
+        "ocr_regions": [],
+    }
+
+    mock_pipeline = VisionPipeline()
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps(payload_omitted_mfr)
+    mock_client.models.generate_content.return_value = mock_resp
+    mock_pipeline._client = mock_client
+
+    with patch("app.api.inspections.get_pipeline", return_value=mock_pipeline):
+        with patch.object(settings, "AI_PIPELINE_MODE", "vision"):
+            resp = await client.post(
+                f"/api/v1/inspections/{inspection_id}/analyze",
+                headers={"Authorization": f"Bearer {inspector_token}"},
+            )
+            assert resp.status_code == 200, f"Failed: {resp.status_code} {resp.text}"
+            data = resp.json()
+
+    # Must be NEEDS_REVIEW, never NON_COMPLIANT
+    assert data["overall_compliance_status"] == "NEEDS_REVIEW"
+    assert data["overall_compliance_status"] != "NON_COMPLIANT"

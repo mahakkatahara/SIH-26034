@@ -1075,4 +1075,29 @@ def test_cross_panel_commodity_name_disagreement_warning(rule_engine):
     assert any("Discrepancy between commodity names on different panels" in note for note in res.notes)
 
 
+def test_model_silence_on_single_field_yields_needs_review_not_non_compliant(rule_engine):
+    """A single field omitted by the model must produce NEEDS_REVIEW, never NON_COMPLIANT."""
+    # 10 fields compliant, but manufacturer_name omitted (not_answered)
+    decls = [
+        {"field_name": "commodity_name", "field_value": "Wheat Flour", "confidence": 0.95},
+        {"field_name": "mrp", "field_value": "₹ 100.00", "raw_text": "MRP Rs 100.00 (incl. of all taxes)", "confidence": 0.98},
+        {"field_name": "net_quantity", "field_value": "1 kg", "confidence": 0.92},
+        {"field_name": "manufacturer_name", "field_value": None, "confidence": 0.0, "extraction_status": "not_answered"},
+        {"field_name": "manufacturer_address", "field_value": "123 Industrial Area, Pune 411001", "confidence": 0.90},
+        {"field_name": "manufacturing_date", "field_value": "2024-05", "confidence": 0.95},
+        {"field_name": "best_before_date", "field_value": "2025-05", "confidence": 0.90},
+        {"field_name": "batch_number", "field_value": "B-1234", "confidence": 0.90},
+        {"field_name": "consumer_care_info", "field_value": "care@test.com", "confidence": 0.90},
+        {"field_name": "country_of_origin", "field_value": "India", "confidence": 0.95},
+        {"field_name": "unit_sale_price", "field_value": "₹ 100.00 / kg", "confidence": 0.90},
+    ]
+    res = rule_engine.evaluate(declarations=decls, package_type="retail")
+    # Must be NEEDS_REVIEW, strictly NOT NON_COMPLIANT
+    assert res.status == ComplianceStatus.NEEDS_REVIEW
+    assert res.status != ComplianceStatus.NON_COMPLIANT
+    # MFR-001 must not be in violations
+    assert not any(v.rule_id == "MFR-001" for v in res.violations)
+
+
+
 

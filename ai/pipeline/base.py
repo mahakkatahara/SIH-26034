@@ -51,6 +51,7 @@ class ExtractedDeclaration:
     confidence: float       # Extraction confidence 0.0–1.0
     bounding_box: Optional[BoundingBox] = None
     extraction_method: str = "unknown"
+    extraction_status: str = "answered"  # "answered" | "not_answered"
 
 
 @dataclass

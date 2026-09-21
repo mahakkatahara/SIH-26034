@@ -245,6 +245,7 @@ class RuleEngine:
             normalized = decl.get("normalized")
             image_id = decl.get("image_id")
             panel = decl.get("panel") or decl.get("panel_id") or decl.get("label")
+            extraction_status = decl.get("extraction_status", "answered")
         else:
             field_name = getattr(decl, "field_name", None)
             field_value = getattr(decl, "field_value", None)
@@ -259,6 +260,7 @@ class RuleEngine:
             normalized = getattr(decl, "normalized", None)
             image_id = getattr(decl, "image_id", None)
             panel = getattr(decl, "panel", None) or getattr(decl, "panel_id", None) or getattr(decl, "label", None)
+            extraction_status = getattr(decl, "extraction_status", "answered")
 
         return {
             "field_name": field_name,
@@ -272,6 +274,7 @@ class RuleEngine:
             "bounding_box": bounding_box,
             "unit": unit,
             "normalized": normalized,
+            "extraction_status": str(extraction_status or "answered"),
         }
 
     @staticmethod
@@ -322,6 +325,15 @@ class RuleEngine:
             cand_conf = float(candidate.get("confidence") or 0.0)
             curr_conf = float(current.get("confidence") or 0.0)
 
+            # Rule 1.5: Answered candidate replaces not_answered current; not_answered cannot overwrite answered
+            cand_status = candidate.get("extraction_status", "answered")
+            curr_status = current.get("extraction_status", "answered")
+            if cand_status == "answered" and curr_status == "not_answered":
+                reconciled[fn] = candidate
+                continue
+            if cand_status == "not_answered" and curr_status == "answered":
+                continue
+
             # Rule 2: Candidate is absent or confidence <= 0.0: never overwrite present current
             if not cand_present or cand_conf <= 0.0:
                 if curr_present:
@@ -363,6 +375,14 @@ class RuleEngine:
         """
         presence_check: Field exists, value non-null, stripped length > 0.
         """
+        if decl and decl.get("extraction_status") == "not_answered":
+            return RuleEvaluationResult(
+                rule_id=rule.rule_id,
+                field=rule.field,
+                status=RuleEvaluationStatus.NEEDS_REVIEW,
+                reason=f"Model did not answer for mandatory field '{rule.field}'",
+            )
+
         if self._is_present(decl):
             return RuleEvaluationResult(
                 rule_id=rule.rule_id,
@@ -972,7 +992,14 @@ class RuleEngine:
             v_type = rule.validation_logic.get("type", "presence_check")
             decl = decls_by_field.get(rule.field)
 
-            if v_type == "presence_check":
+            if decl and decl.get("extraction_status") == "not_answered":
+                eval_res = RuleEvaluationResult(
+                    rule_id=rule.rule_id,
+                    field=rule.field,
+                    status=RuleEvaluationStatus.NEEDS_REVIEW,
+                    reason=f"Model did not answer for field '{rule.field}'; requires human review",
+                )
+            elif v_type == "presence_check":
                 eval_res = self._check_presence(rule, decl)
             elif v_type == "format_check":
                 eval_res = self._check_format(rule, decl)
@@ -1000,10 +1027,23 @@ class RuleEngine:
                 needs_review_reasons.append(f"{rule.rule_id} ({rule.field}): {eval_res.reason}")
 
         # 4. Status Aggregation Logic
-        # Differentiate between incomplete inspection (missing panels) vs low extraction confidence (bad photo)
+        # Differentiate between incomplete inspection (missing panels), model silence, vs low extraction confidence
         status: ComplianceStatus
 
-        if absent_mandatory_count >= 3:
+        unanswered_fields = [
+            r.field for r in applicable_rules
+            if decls_by_field.get(r.field, {}).get("extraction_status") == "not_answered"
+        ]
+
+        if unanswered_fields:
+            # Model silence / partial model failure: NEVER non-compliant, always NEEDS_REVIEW
+            status = ComplianceStatus.NEEDS_REVIEW
+            note = (
+                f"Model did not answer for fields ({', '.join(sorted(set(unanswered_fields)))}). "
+                f"Downgraded to NEEDS_REVIEW as model silence cannot be determined as non-compliant."
+            )
+            notes.append(note)
+        elif absent_mandatory_count >= 3:
             # 3 or more mandatory fields are absent: suspect unphotographed panel
             status = ComplianceStatus.NEEDS_REVIEW
             note = (

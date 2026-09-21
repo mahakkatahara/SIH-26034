@@ -7,6 +7,7 @@ declarations with bounding boxes, confidence scores, and OCR text regions.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -436,7 +437,44 @@ class VisionPipeline(BasePipeline):
         for attempt in range(2):
             try:
                 response_text = self._call_gemini_vision(client, image_bytes, mime_type)
-                analysis_data = PackageLabelAnalysis.model_validate_json(response_text)
+                clean_text = response_text.strip()
+                if clean_text.startswith("```"):
+                    clean_text = clean_text.split("\n", 1)[-1]
+                    if clean_text.endswith("```"):
+                        clean_text = clean_text.rsplit("```", 1)[0]
+                    clean_text = clean_text.strip()
+
+                try:
+                    analysis_data = PackageLabelAnalysis.model_validate_json(clean_text)
+                except Exception:
+                    # Model silence: model returned valid JSON but omitted required statutory keys
+                    raw_dict = json.loads(clean_text)
+                    if isinstance(raw_dict, dict):
+                        validated_fields = {}
+                        for k, v in raw_dict.items():
+                            if k in PackageLabelAnalysis.model_fields:
+                                if isinstance(v, dict):
+                                    try:
+                                        validated_fields[k] = FieldExtraction.model_validate(v)
+                                    except Exception:
+                                        validated_fields[k] = FieldExtraction(
+                                            value=v.get("value"),
+                                            raw_text=v.get("raw_text"),
+                                            confidence=float(v.get("confidence", 0.0) or 0.0),
+                                            bounding_box=v.get("bounding_box"),
+                                        )
+                                elif v is None:
+                                    validated_fields[k] = FieldExtraction()
+                                elif isinstance(v, list) and k == "ocr_regions":
+                                    validated_fields[k] = v
+                                else:
+                                    validated_fields[k] = v
+                        analysis_data = PackageLabelAnalysis.model_construct(
+                            _fields_set=set(raw_dict.keys()),
+                            **validated_fields,
+                        )
+                    else:
+                        raise
                 break
             except Exception as exc:
                 last_error = exc
@@ -463,12 +501,19 @@ class VisionPipeline(BasePipeline):
             pass
 
         for field_name in self.MANDATORY_FIELDS:
-            field_data: FieldExtraction = getattr(analysis_data, field_name, FieldExtraction())
+            is_answered = field_name in analysis_data.model_fields_set
+            extraction_status = "answered" if is_answered else "not_answered"
+
+            field_data = getattr(analysis_data, field_name, None)
+            if field_data is None:
+                field_data = FieldExtraction()
+            elif isinstance(field_data, dict):
+                field_data = FieldExtraction(**field_data)
 
             # Missing field rule: value null => value None, confidence 0.0
             val = field_data.value
             raw = field_data.raw_text
-            conf = float(field_data.confidence) if val is not None else 0.0
+            conf = float(field_data.confidence) if (val is not None and is_answered) else 0.0
             bbox_coords = field_data.bounding_box
 
             bbox = parse_bounding_box(bbox_coords, conf, img_width, img_height)
@@ -496,6 +541,7 @@ class VisionPipeline(BasePipeline):
                 confidence=conf,
                 bounding_box=bbox,
                 extraction_method="gemini_vision",
+                extraction_status=extraction_status,
             )
             declarations.append(declaration)
             confidences.append(conf)
